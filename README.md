@@ -64,7 +64,13 @@ agents / MCP ──► bb brandwise CLI ──► plugin ──► packages/core
 
 ## Installation
 
-**One command:** `npx create-brandwise` installs bb if it is missing, clones BrandWise into `./brandwise`, installs the dependencies, starts the infrastructure and provisions the instance with the plugin (the manual steps below, done for you). Docker must be installed and running; the script tells you if not. `--dry-run` only prints what it would do.
+**One command:** `npx create-brandwise` asks a few questions, then installs bb if it is missing, clones BrandWise into `./brandwise`, installs the dependencies, writes `.env` and provisions the instance with the plugin (the manual steps below, done for you). The questions:
+
+- **Where do Postgres and S3 storage live?** *Local* (the installer starts both in Docker; needs Docker running), *remote* (you enter a `DATABASE_URL` and S3 settings, nothing is started in Docker) or *already running* (you manage them and edit `.env` yourself).
+- **Publishing channels now?** Optional Telegram and Resend keys; skip them and add them to `.env` later.
+- **Display mode:** minimal (marketing only) or full.
+
+Flags for scripts: `--infra=local|remote|manual`, `--mode=minimal|full`, `--yes` (no questions; remote values come from environment variables), `--dry-run` (print the steps only). A `.env` that already exists is kept.
 
 BrandWise runs on one machine (macOS or Linux): a dedicated bb instance, Postgres and an S3 emulator in Docker.
 
