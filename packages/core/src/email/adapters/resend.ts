@@ -63,6 +63,9 @@ export function resendProvider(cfg: ResendConfig): EmailProvider {
     async cancel(externalId) {
       await call("POST", `/broadcasts/${externalId}/cancel`, {});
     },
+    async sendTest(m) {
+      await call("POST", "/emails", { from: m.from, to: [m.to], subject: m.subject, html: m.html, ...(m.text ? { text: m.text } : {}) });
+    },
   };
 
   const parsePayload = (body: string, eventId: string): EmailEvent[] => {
@@ -112,5 +115,7 @@ export function resendProvider(cfg: ResendConfig): EmailProvider {
     },
   };
 
-  return { id: "resend", capabilities: resendCapabilities, sender, events };
+  // contact fields are written {{{contact.first_name|fallback}}} in broadcasts
+  const dialect = { unsubscribe: sender.unsubscribeTag, token: (field: string, fallback?: string) => `{{{contact.${field}${fallback ? `|${fallback}` : ""}}}}`, hostedImagesRequired: true };
+  return { id: "resend", capabilities: resendCapabilities, sender, events, dialect };
 }

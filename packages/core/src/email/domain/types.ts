@@ -52,6 +52,16 @@ export type CampaignDraft = {
   tags: Record<string, string>;
 };
 
+/** How a provider writes personalisation and the unsubscribe link. Templates use neutral tokens; the dialect translates them. */
+export type MergeDialect = {
+  /** The provider's unsubscribe merge tag. */
+  unsubscribe: string;
+  /** A personalisation token for a contact field, with an optional fallback shown when the contact has none. */
+  token(field: string, fallback?: string): string;
+  /** True when images must be on a public URL (every real provider); false for the simulator. */
+  hostedImagesRequired: boolean;
+};
+
 export type Capabilities = {
   emits: EventType[];
   details: DetailKey[];

@@ -27,6 +27,7 @@ export function memoryProvider(cfg: { id?: string; /** prefix of campaign ids: t
   return {
     id,
     capabilities: memoryCapabilities,
+    dialect: { unsubscribe: "{{unsubscribe}}", token: (field: string, fallback?: string) => `{{${field}${fallback ? `|${fallback}` : ""}}}`, hostedImagesRequired: false },
     campaigns,
     outbox,
     sender: {

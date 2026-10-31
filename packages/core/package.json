@@ -6,14 +6,16 @@
   "main": "src/index.ts",
   "scripts": {
     "migrate": "node src/migrate.ts",
-    "test": "node --test src/*.test.ts src/email/*.test.ts src/regulator/*.test.ts"
+    "test": "node --test src/*.test.ts src/email/*.test.ts src/email/templates/*.test.ts src/regulator/*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3",
     "@aws-sdk/s3-request-presigner": "^3",
+    "mustache": "^4.2.0",
     "pg": "^8"
   },
   "devDependencies": {
+    "@types/mustache": "^4.2.6",
     "@types/node": "^22",
     "@types/pg": "^8"
   }

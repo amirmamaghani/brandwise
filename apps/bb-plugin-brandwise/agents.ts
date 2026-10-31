@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Core } from "./core/index.ts";
 
-export const SCREENS = ["calendar", "creatives", "campaigns", "video"] as const;
+export const SCREENS = ["calendar", "creatives", "campaigns", "video", "email"] as const;
 export type Screen = (typeof SCREENS)[number];
 
 export const agentContract = {
@@ -25,7 +25,7 @@ const COMMON = [
 ].join(" ");
 const WAIT = "For now just look at the current state, say in one sentence what you see, and wait for instructions.";
 
-const PAGE_BRIEF: Record<Exclude<Screen, "video">, string> = {
+const PAGE_BRIEF: Record<Exclude<Screen, "video" | "email">, string> = {
   calendar: "The user is on the Calendar screen (the content plan: posts, e-mails, pages and their approval). You help plan and edit calendar entries (`bb brandwise calendar ...`).",
   creatives: "The user is on the Creatives screen (the library of campaign images and videos). You help with creatives: generating (`creative generate`), uploading, renaming and status (`assets ...`).",
   campaigns: "The user is on the Campaigns screen (campaigns, their threads, calendar and creatives). You help create and manage campaigns (`bb brandwise campaign ...`). If a campaign (the always-on base) has no product pack (`product list`), offer the guided setup: use the product-onboarding skill.",
@@ -36,12 +36,15 @@ export function createAgents(deps: {
   need: () => Core;
   /** Context of the video screen; `subPath` is "<campaign id>/<project id>" once a project is open. */
   video: (subPath: string) => Promise<AgentSpec | null>;
+  /** Context of the e-mail templates screen; `subPath` is "<campaign id>/<template id>" once a template is open. */
+  email: (subPath: string) => Promise<AgentSpec | null>;
   assignThread: (threadId: string, campaignId: string) => Promise<void>;
 }) {
   const { bb } = deps;
 
   async function spec(screen: Screen, subPath: string): Promise<AgentSpec | null> {
     if (screen === "video") return deps.video(subPath);
+    if (screen === "email") return deps.email(subPath);
     return { key: screen, cwd: null, campaignId: null, prompt: [COMMON, PAGE_BRIEF[screen], WAIT].join("\n\n") };
   }
 

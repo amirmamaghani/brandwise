@@ -52,6 +52,7 @@ export function simProvider(cfg: { recipient: (address: string) => Recipient; no
   return {
     id: "sim",
     capabilities: simCapabilities,
+    dialect: { unsubscribe: "{{unsubscribe}}", token: (field: string, fallback?: string) => `{{${field}${fallback ? `|${fallback}` : ""}}}`, hostedImagesRequired: false },
     attachSink(s) { sink = s; },
     sender: {
       unsubscribeTag: "{{unsubscribe}}",

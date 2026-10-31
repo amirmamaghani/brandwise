@@ -1,0 +1,13 @@
+{
+  "name": "@brandwise/email-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional e-mail template engine for BrandWise: compiles MJML to responsive HTML. Runs as a child process so the plugin bundle stays free of it.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {},
+  "dependencies": {
+    "mjml": "^5.4.1",
+    "puppeteer-core": "^25.16.0"
+  }
+}

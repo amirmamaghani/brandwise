@@ -1,5 +1,5 @@
 // Ports: what the domain needs from the outside. Adapters implement the provider ports, the store implements the storage ports.
-import type { CampaignDraft, Capabilities, Counts, Detail, EmailEvent, EventRef, EventType } from "./types.ts";
+import type { CampaignDraft, Capabilities, Counts, Detail, EmailEvent, EventRef, EventType, MergeDialect } from "./types.ts";
 
 export type SendStatus = "draft" | "scheduled" | "sent" | "canceled" | "unknown";
 
@@ -13,6 +13,8 @@ export interface EmailSender {
   /** Lets a retry find out whether an earlier attempt already got through. */
   status?(externalId: string): Promise<SendStatus>;
   cancel?(externalId: string): Promise<void>;
+  /** One test e-mail to one address (no list, no tracking of the campaign): to see a template in a real inbox. */
+  sendTest?(message: { from: string; to: string; subject: string; html: string; text?: string }): Promise<void>;
 }
 
 /** Inbound: turn what the provider sends us into our events. Pure: no database, no side effects. */
@@ -31,6 +33,8 @@ export type EmailProvider = {
   capabilities: Capabilities;
   sender?: EmailSender;
   events?: EmailEventSource;
+  /** How this provider writes merge tags and the unsubscribe link (for templates). */
+  dialect?: MergeDialect;
   /** For providers that produce events themselves (a simulation): receives the function that stores them. */
   attachSink?(sink: (events: EmailEvent[]) => Promise<unknown>): void;
 };

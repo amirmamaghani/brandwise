@@ -13,6 +13,7 @@ import * as px from "node:path";
 import { agentContract, createAgents } from "./agents.ts";
 import { productCli } from "./product.ts";
 import { createVideo, videoContract } from "./video.ts";
+import { createEmailTemplates, templatesContract } from "./email-templates.ts";
 import { sleep, slug } from "./util.ts";
 import { connectorsFrom, runDue } from "./core/publish.ts";
 import { createEmail } from "./core/email/index.ts";
@@ -161,6 +162,7 @@ export const rpcContract = defineRpcContract({
     }),
   },
   ...videoContract,
+  ...templatesContract,
   ...agentContract,
   settings_get: { input: z.null(), output: settingsViewSchema },
   config_get: { input: z.object({ campaignId: z.string().nullable() }), output: configViewSchema },
@@ -220,6 +222,10 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     section("video", "Video", "The optional Remotion engine behind the Video page.", {
       videoEnginePath: { type: "string", label: "Engine folder", description: "Folder holding render.mjs of @brandwise/video-remotion. Empty = video commands are off.", default: "" },
+    }),
+    section("email-templates", "E-mail templates", "The optional engine behind the E-mail page: MJML and a headless Chrome for pictures.", {
+      emailEnginePath: { type: "string", label: "Engine folder", description: "Folder of @brandwise/email-engine (MJML, puppeteer). Empty = the e-mail template commands are off.", default: "" },
+      chromePath: { type: "string", label: "Chrome", description: "Path of a Chrome or Chrome Headless Shell for pictures of e-mails. Empty = the one of the video engine, or a Chrome installed on this machine.", default: "" },
     }),
     section("telegram", "Telegram", "The channel the BrandWise posts to.", {
       resendApiKey: { type: "string", label: "Resend API key", description: "Switches the e-mail channel on (provider=resend in the campaign target).", default: "", secret: true },
@@ -424,7 +430,8 @@ export default async function plugin(bb: BbPluginApi) {
     bb, need, enginePath: () => cfg.videoEnginePath, assetsChanged: () => bb.realtime.publish(ASSETS_CHANGED, {}),
   });
 
-  const agents = createAgents({ bb, need, video: video.agentContext, assignThread });
+  const emailTemplates = createEmailTemplates({ need, email: () => email, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath });
+  const agents = createAgents({ bb, need, video: video.agentContext, email: emailTemplates.agentContext, assignThread });
 
   // Display mode: applied once per change of the setting, on `mode set` / the Settings switch, and on `mode apply`.
   const allowed = allowedModes();
@@ -519,6 +526,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.rpc.register(rpcContract, {
     campaigns_list: async () => ({ campaigns: await need().campaigns.list() }),
     ...video.rpc,
+    ...emailTemplates.rpc,
     ...agents,
     calendar_list: async () => ({ entries: await need().calendar.list() }),
     calendar_add: async (input) => {
@@ -727,6 +735,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" | complete <id> [--result '<json>']",
     "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
     "  bb brandwise sim status | advance <90m|24h|2d> | reset   (development clock for the simulated provider)",
+    "  bb brandwise email template seed <id> | list | render <id> [--target preview|resend] [--raw] | lint <id> | preview <id> [--width 640] | send-test <id> --to <address> [--provider <id>]   (e-mail templates: MJML layout, slots, brand; add --campaign <c>; preview writes a PNG you can open)",
     "  bb brandwise email stats <entry-id> | --campaign <c>   (opens, clicks, bounces... of sent e-mail campaigns, the same for every provider)",
     "  bb brandwise email ingest --provider <id> --file <payload.json>   (replay a saved webhook payload)",
     "  bb brandwise calendar run-due [--limit N]   (publish approved entries whose time has come; run every minute by a bb automation, prints nothing when nothing is due)",
@@ -755,8 +764,8 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject"]);
-  const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width"]);
+  const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
   const fmtEntry = (e: { id: string; scheduledAt: string; channel: string; tier: number; status: string; campaignName: string; title: string; reviewNote?: string | null }) =>
@@ -928,7 +937,7 @@ export default async function plugin(bb: BbPluginApi) {
     commands: [
       { name: "editor", summary: "The editor-in-chief regulator: signals, experiments, journal, tasks", usage: "bb brandwise editor signals|experiments|journal|tasks|goals ..." },
       { name: "sim", summary: "Development clock for the simulated e-mail provider", usage: "bb brandwise sim status|advance|reset" },
-      { name: "email", summary: "E-mail campaign statistics and event replay", usage: "bb brandwise email stats|ingest ..." },
+      { name: "email", summary: "E-mail campaign statistics, event replay and e-mail templates", usage: "bb brandwise email stats|ingest|template ..." },
       { name: "campaign", summary: "List or add campaigns (an always-on base or a time-bound campaign)", usage: "bb brandwise campaign list|add|channel|assign|unassign ..." },
       { name: "calendar", summary: "List, add, edit, send back, approve, withdraw approval of or cancel calendar entries", usage: "bb brandwise calendar list|add|edit|request-changes|unapprove|approve|cancel|run-due ..." },
       { name: "assets", summary: "Add, download (Instagram, TikTok, YouTube), list or sign assets stored in S3", usage: "bb brandwise assets add|download|download-photos|list|url ..." },
@@ -1017,6 +1026,7 @@ export default async function plugin(bb: BbPluginApi) {
           if (done.length > 0) await changed();
           return json ? reply(done, "") : { exitCode: done.some((o) => o.result === "failed") ? 1 : 0, stdout: done.map((o) => `${o.result.padEnd(12)} ${o.id}  ${o.channel}  ${o.title}  ${o.detail}`).join("\n") };
         }
+        if (area === "email" && action === "template") return emailTemplates.cli(args, { val, positional, reply, usage });
         if (area === "email" && action === "stats") {
           if (email === null) return { exitCode: 1, stderr: "Not configured: run infra/bb-instance/provision.sh apply" };
           const entryId = positional(args.slice(2))[0];

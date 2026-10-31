@@ -143,3 +143,24 @@ A video project is a normal Remotion project, one folder per project: `~/.bb-bra
 5. `video render ... [--name <n>]` renders an MP4 creative. If it prints "Still rendering", run `video collect <job-id>`. Max 2 renders at once, 4096 px per side and 3840x2160 pixels at most, 60 fps, 120 s.
 6. A prop `<name>Asset: "<asset id>"` is replaced by `<name>Url` (signed URL) in the component; the output is marked AI-generated if any input asset is.
 7. Show the result with `::creative{ids="<id>"}`. Flags apply to `--dir <folder>` as well as `--template`.
+
+## E-mail templates
+
+A template is a folder per campaign (`<data dir>/email-templates/<campaign id>/<template id>/`), the same folder the E-mail page shows live. Four files:
+- `template.mjml`: the layout in [MJML](https://mjml.io). Slots are written `{{slot}}` (escaped); `{{{slot}}}` only for `richtext-lite` slots. Brand values are `{{brand.colors.primary}}`, `{{brand.footer.address}}`...
+- `template.json`: the slot schema (`text`, `richtext-lite`, `image`, `link`, `list`, `enum`; `required`, `max`). Content that does not fit it is refused: that is the contract between whoever designs and whoever writes.
+- `brand.json`: colours, fonts, name, footer (company and postal address), `allowedLinkDomains`.
+- `sample.json`: example content for the preview.
+
+Merge tags are neutral and translated for each provider: `[[first_name|there]]` (always give a fallback) and `[[unsubscribe_url]]`. Never write a provider's own syntax.
+
+| Command | What it does |
+|---|---|
+| `bb brandwise email template seed <id> --campaign <c>` | New folder from the starter template |
+| `bb brandwise email template list` | Templates and their folders |
+| `bb brandwise email template lint <id> --campaign <c> [--target resend]` | Checks (exit 1 on an error): unsubscribe link, postal address, size (Gmail clips about 102 KB), alt text, links, images on https, no scripts, merge-tag fallbacks, spam words |
+| `bb brandwise email template render <id> --campaign <c> [--target resend] [--raw]` | Subject, size and findings; `--raw` prints the HTML |
+| `bb brandwise email template preview <id> --campaign <c> [--width 375]` | Writes a full-page PNG and prints its path: **open it and look** before you say you are done |
+| `bb brandwise email template send-test <id> --to <address> --campaign <c>` | One test e-mail through the campaign's provider (the sender is the `from=` of its e-mail target) |
+
+Rules: keep the unsubscribe link and the postal address in the footer (lint refuses an e-mail without them); images need a public https address (stored assets are only inlined in previews until a public bucket exists); no scripts, forms or iframes; do not change `template.json` slots without updating `sample.json`. A template only becomes an e-mail when an entry carries its rendered HTML as the body (`--body "$(bb brandwise email template render <id> --campaign <c> --target <provider> --raw)"`), and that entry still needs its approval like any other.

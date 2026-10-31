@@ -34,6 +34,7 @@ An open-source, agent-driven marketing system that runs on [bb](https://getbb.ap
 | E-mail | Provider-neutral domain: events, counts and a metric catalog (opens, clicks, bounces, rates), adapters, webhook ingest, `email stats` |
 | Generation | Higgsfield image and video generation with per-call and daily credit limits |
 | Video (optional) | Remotion projects per campaign, Remotion Studio embedded next to an agent chat, renders land in Creatives |
+| E-mail templates | MJML templates per campaign with slots and a brand file, a live preview page, lint (unsubscribe, postal address, size, alt text, links, ...), full-page pictures for agents, test sends, an agent that edits the template while you watch. Optional engine in `packages/email-engine`, design in [`docs/email-templates.md`](docs/email-templates.md) |
 | Editor (regulator) | An editor agent steers an e-mail campaign as a feedback loop: signals, A/B experiments judged by code (maturity, minimum sample, hysteresis, guards, cooldown), tasks for author agents, a journal. Testable in minutes on a simulated provider and clock, see [`docs/editor.md`](docs/editor.md) |
 | Agents | "Start agent" in the side panel of every page; the agent knows which page and project you are on |
 

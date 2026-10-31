@@ -70,6 +70,7 @@ apply() {
    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then cfg telegramBotToken "$TELEGRAM_BOT_TOKEN"; fi
    # optional video engine (agent-written Remotion templates); empty until its npm deps are installed
    if [ -f "$root/packages/video-remotion/node_modules/.package-lock.json" ]; then cfg videoEnginePath "$root/packages/video-remotion"; fi
+   if [ -d "$root/packages/email-engine/node_modules/mjml" ]; then cfg emailEnginePath "$root/packages/email-engine"; fi
    # the mode is a user choice in Settings: profile.env only seeds it, unless BW_MODE_ENFORCE=1
    if [ "$first_install" = 1 ] || [ "${BW_MODE_ENFORCE:-0}" = 1 ]; then cfg mode "${BW_MODE:-full}"; fi)
   bb plugin reload brandwise >/dev/null

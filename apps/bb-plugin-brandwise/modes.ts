@@ -45,7 +45,7 @@ export const MODES = {
       // Navigation destinations that stay: new thread, search, automations and our two pages. Plugins and Skills go.
       "sidebar.visiblePluginPanels": [
         "__bb__/new-thread", "__bb__/search-threads", "__bb__/automations",
-        "brandwise/calendar", "brandwise/creatives", "brandwise/campaigns", "brandwise/video",
+        "brandwise/calendar", "brandwise/creatives", "brandwise/campaigns", "brandwise/video", "brandwise/email",
       ],
     },
     css: "",
