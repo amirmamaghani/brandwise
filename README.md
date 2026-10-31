@@ -62,17 +62,36 @@ agents / MCP ──► bb brandwise CLI ──► plugin ──► packages/core
 - `infra`: local Postgres and an S3 emulator (Docker), and provisioning of a dedicated bb instance.
 - `docs`: design notes, see [`docs/roadmap.md`](docs/roadmap.md) and [`docs/email.md`](docs/email.md).
 
-## Quick start (local)
+## Installation
 
-Requirements: Node 24, Docker, [bb](https://getbb.app) 0.48 or newer, `rsync`.
+BrandWise runs on one machine (macOS or Linux): a dedicated bb instance, Postgres and an S3 emulator in Docker.
+
+**Requirements:** Node 24, pnpm, Docker, [bb](https://getbb.app) 0.48 or newer (the `bb` and `bb-app` commands on your `PATH`), `rsync`, `python3`. Homebrew is used to install `yt-dlp`, `ffmpeg` and `gallery-dl` when they are missing (or install them yourself).
+
+**1. Get the code and the dependencies**
 
 ```bash
-cp .env.example .env            # local defaults work as they are
-npm run infra:up                # Postgres and an S3 emulator
+git clone https://github.com/amirmamaghani/brandwise.git && cd brandwise
+pnpm install
+(cd apps/bb-plugin-brandwise && npm install)
+```
+
+**2. Configure.** The defaults in `.env.example` match the local Docker stack, so for a first try just copy them:
+
+```bash
+cp .env.example .env            # never commit .env
+```
+
+**3. Start the infrastructure and the instance**
+
+```bash
+pnpm infra:up                   # Postgres on :5436 and an S3 emulator on :9010
 infra/bb-instance/provision.sh up
 ```
 
-This starts a dedicated bb instance on port 38896 (your own bb stays untouched), builds and installs the plugin, applies the database migrations and creates the scheduler automation. Open <http://127.0.0.1:38896>, then:
+This starts a dedicated bb instance on port 38896 (your own bb stays untouched), runs the database migrations, builds and installs the plugin, creates the "Main brand" campaign and the scheduler automation. It is safe to run again; `provision.sh apply` re-installs the plugin after a code change, `status` shows the state and `down` stops the instance. Its data lives in `~/.bb-brandwise`. The instance does not start at boot.
+
+**4. Try it.** Open <http://127.0.0.1:38896>, then:
 
 ```bash
 export BB_SERVER_URL=http://127.0.0.1:38896 BB_HOST_DAEMON_PORT=38897
@@ -82,6 +101,13 @@ bb brandwise calendar list                                   # within a minute t
 ```
 
 `mock` publishes to nowhere and is only for trying the pipeline. Tier 2 and 3 entries wait for your approval in the Calendar page.
+
+**5. Optional parts**
+
+- **E-mail templates (MJML, full-page previews):** `(cd packages/email-engine && npm install)`, then `provision.sh apply`. It also needs Chrome Headless Shell for the pictures, which the video engine downloads.
+- **Video (Remotion):** `(cd packages/video-remotion && npm install)`, then `provision.sh apply`. Remotion has its own licence, see its README.
+- **Tests:** `cd packages/core && npm test` (needs the infrastructure from step 3).
+- **Production:** point `DATABASE_URL` and the six `S3_*` variables in `.env` at a managed Postgres and any S3-compatible bucket (examples in `.env.example`), run `provision.sh apply`. To reach the instance from other devices, see "Reaching the instance from other devices" in [`.claude/skills/bb-instance/SKILL.md`](.claude/skills/bb-instance/SKILL.md); never bind it to `0.0.0.0`, because its agents run shell commands.
 
 Optional channels switch on when their credentials are in `.env` (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET`. Where a campaign publishes (a Telegram chat, an e-mail audience) is set per campaign: `bb brandwise campaign channel set ...`.
 
