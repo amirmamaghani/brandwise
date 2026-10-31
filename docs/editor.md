@@ -66,6 +66,8 @@ cd packages/core && set -a && . ../../.env && set +a
 node scripts/editor-loop.mjs --cycles 9 --step 13h
 ```
 
+One recorded 18-cycle run (7 experiments, 6 concluded): the agents took the click rate from a 3.5 % baseline to 8.5 % (true value in the simulated world) with two adoptions, the other four conclusions were inconclusive and left the incumbent alone (hysteresis), nothing unsafe was adopted, and every hard check passed. The agents never tried a clickbait subject on their own, so the guard path is covered by the scripted test, not by this run. Authors hand in only a subject line (`editor tasks submit`); the system builds the entry, because an author that was asked to schedule it picked a wrong date.
+
 A cycle is: an editor run, an author run if there are open tasks, one scheduler pass, then the clock moves on. The harness decides nothing for the agents. Afterwards it checks the database against the rules that must hold whatever the agents did (no verdict on immature data, separate arm audiences, no unsafe winner, goals untouched, a journal entry per run, a learning per conclusion, tasks claimed by an author) and reports soft results (at most one statistically false adoption, the final incumbent at least as good as the baseline). It exits non-zero when a hard rule fails.
 
 ## Going from the lab to real e-mail

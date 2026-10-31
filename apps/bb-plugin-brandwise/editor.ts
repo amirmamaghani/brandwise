@@ -99,6 +99,12 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
         return reply(t, `Task ${t.id} created (${t.kind}). An author agent will claim it.`);
       }
       if (sub === "claim") { if (!rest[1]) return bad; const t = await reg.tasks.claim(rest[1], who); return reply(t, `Task ${t.id} is yours: ${t.brief}\nparams: ${JSON.stringify(t.params)}`); }
+      if (sub === "submit") { // an author's way to finish a write_variant task: only the subject is theirs, the rest comes from the task
+        const subject = val(args, "--subject");
+        if (!rest[1] || subject === undefined) return bad;
+        const t = await reg.tasks.submitVariant(rest[1], subject, who);
+        return reply(t, `Task ${t.id} done: entry ${(t.result as { entry: string }).entry} "${(t.result as { subject: string }).subject}" is in the calendar (${(t.result as { status: string }).status}).`);
+      }
       if (sub === "complete") { if (!rest[1]) return bad; const t = await reg.tasks.complete(rest[1], val(args, "--result") ? JSON.parse(val(args, "--result")!) : {}); return reply(t, `Task ${t.id} done.`); }
       const list = await reg.tasks.list(b.id, val(args, "--status"));
       return reply(list, list.map((t) => `${t.id}  ${t.status}${t.claimedBy ? " by " + t.claimedBy : ""}  ${t.kind}: ${t.brief}  ${JSON.stringify(t.params)}`).join("\n") || "No tasks.");

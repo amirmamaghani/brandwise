@@ -113,6 +113,26 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
       list: (campaignId: string, status?: string) => store.tasks(campaignId, status),
       get: (id: string) => store.task(id),
       claim: async (id: string, by: string) => { const t = await store.taskClaim(id, by); if (!t) throw new Error(`Task ${id} is not open (already claimed, finished or unknown)`); return t; },
+      /**
+       * Fulfil a write_variant task: the author supplies only the subject line, code does the rest (arm campaign, body, tier, time),
+       * so an arm can never be mis-scheduled or mis-addressed. The control must use the incumbent subject exactly.
+       */
+      async submitVariant(id: string, subject: string, by: string) {
+        const t = await store.task(id);
+        if (!t || t.kind !== "write_variant") throw new Error(`Task ${id} is not a write_variant task`);
+        if (t.status !== "claimed") throw new Error(`Task ${id} is ${t.status}: claim it first (and only once)`);
+        const p = t.params as { arm?: string; role?: string; subject?: string; baseSubject?: string; body?: string; tier?: number };
+        if (!p.arm || !p.body || (p.role !== "control" && p.role !== "challenger")) throw new Error("The task has no arm, body or role: ask the editor to create it again");
+        const title = p.role === "control" ? p.subject : subject.trim();
+        if (!title) throw new Error("The control task needs a subject in its params");
+        if (p.role === "challenger") {
+          if (title.length < 3 || title.length > 70) throw new Error("A subject line is 3 to 70 characters");
+          if (title === (p.baseSubject ?? p.subject)) throw new Error("The challenger must differ from the incumbent subject");
+        }
+        const arm = await core.campaigns.resolve(p.arm);
+        const entry = await core.calendar.add({ campaignId: arm.id, title, channel: "email", scheduledAt: (await clock.now()).toISOString(), tier: (p.tier as 1 | 2 | 3) ?? 1, body: p.body, createdBy: by });
+        return store.taskFinish(id, "done", { entry: entry.id, subject: title, status: entry.status }) as Promise<NonNullable<Awaited<ReturnType<typeof store.taskFinish>>>>;
+      },
       complete: async (id: string, result: unknown) => { const t = await store.taskFinish(id, "done", result); if (!t) throw new Error(`Task ${id} is already finished or unknown`); return t; },
     },
   };
