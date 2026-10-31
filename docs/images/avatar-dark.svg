@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img"><title>BrandWise</title><rect width="1024" height="1024" fill="#0b0d10"/><circle cx="512" cy="512" r="470" fill="url(#glow-k)"/><defs><radialGradient id="glow-k"><stop offset="0" stop-color="#FF5A1F" stop-opacity=".55"/><stop offset="1" stop-color="#FF5A1F" stop-opacity="0"/></radialGradient></defs><svg x="152" y="214" width="720" height="583" viewBox="-8 -8 507 405"><defs>
+<linearGradient id="g-k" x1="40" y1="20" x2="460" y2="380" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#f1f1f1"/><stop offset="1" stop-color="#d9d9d9"/></linearGradient>
+</defs>
+<g id="b" fill="url(#g-k)" stroke="url(#g-k)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+<path d="M82 40 L47 228" fill="none"/><path d="M118 160 C60 160 12 206 12 264 C12 322 56 366 112 366 C170 366 222 320 222 262 C222 204 176 160 118 160Z M116 214 C148 214 168 238 168 264 C168 292 146 312 114 312 C84 312 66 290 66 262 C66 236 86 214 116 214Z" fill-rule="evenodd" stroke="none"/></g>
+<g id="w-edge" fill="none" stroke="#000" stroke-opacity="0.5" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"><path d="M222 128 L262 318 L330 190 L398 318 L470 128"/></g>
+<g id="w" fill="none" stroke="url(#g-k)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"><path d="M222 128 L262 318 L330 190 L398 318 L470 128"/></g></svg></svg>
