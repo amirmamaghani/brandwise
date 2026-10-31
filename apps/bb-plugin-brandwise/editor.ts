@@ -28,6 +28,7 @@ export function fmtSignals(s: Signals): string {
   for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
   for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
   if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
+  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, an experiment can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive.`);
   const p = s.allowed.proposeExperiment;
   lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
   for (const n of s.notes) lines.push(`Note: ${n}`);
@@ -48,6 +49,7 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     const rest = positional(args.slice(2));
     const who = val(args, "--as") ?? "agent";
     const bad = { exitCode: 1, stderr: usage };
+    if (!action || !["signals", "goals", "unfreeze", "experiments", "journal", "tasks"].includes(action)) return bad;   // no campaign lookup for a bare command
     const b = await base(args, io);
     const asOf = val(args, "--as-of");
 
@@ -100,9 +102,9 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
       }
       if (sub === "claim") { if (!rest[1]) return bad; const t = await reg.tasks.claim(rest[1], who); return reply(t, `Task ${t.id} is yours: ${t.brief}\nparams: ${JSON.stringify(t.params)}`); }
       if (sub === "submit") { // an author's way to finish a write_variant task: only the subject is theirs, the rest comes from the task
-        const subject = val(args, "--subject");
-        if (!rest[1] || subject === undefined) return bad;
-        const t = await reg.tasks.submitVariant(rest[1], subject, who);
+        const subject = val(args, "--subject"), content = val(args, "--content");
+        if (!rest[1] || (subject === undefined && content === undefined)) return bad;
+        const t = await reg.tasks.submitVariant(rest[1], { subject, content: content ? (JSON.parse(content) as Record<string, unknown>) : undefined }, who);
         return reply(t, `Task ${t.id} done: entry ${(t.result as { entry: string }).entry} "${(t.result as { subject: string }).subject}" is in the calendar (${(t.result as { status: string }).status}).`);
       }
       if (sub === "complete") { if (!rest[1]) return bad; const t = await reg.tasks.complete(rest[1], val(args, "--result") ? JSON.parse(val(args, "--result")!) : {}); return reply(t, `Task ${t.id} done.`); }

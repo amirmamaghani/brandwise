@@ -334,6 +334,21 @@ export function createCore(cfg: CoreConfig) {
       const a = await assets.get(id);
       return getSignedUrl(s3, new GetObjectCommand({ Bucket: cfg.s3.bucket, Key: a.storageKey }), { expiresIn: expiresSec });
     },
+    /**
+     * Copy an image to the public bucket under a permanent, content-addressed key and return its public address. E-mails need this:
+     * a signed link expires, an e-mail is read for weeks. Only images, only on request; the private bucket stays private.
+     */
+    async publishPublic(id: string, pub: { bucket: string; baseUrl: string }): Promise<string> {
+      const a = await assets.get(id);
+      if (!a.mime.startsWith("image/")) throw new Error(`Only images are published to the public bucket (${a.name} is ${a.mime})`);
+      const key = `e/${a.sha256}${extname(a.storageKey)}`;
+      const exists = await s3.send(new HeadObjectCommand({ Bucket: pub.bucket, Key: key })).then(() => true, () => false);
+      if (!exists) {
+        const source = await s3.send(new GetObjectCommand({ Bucket: cfg.s3.bucket, Key: a.storageKey }));
+        await s3.send(new PutObjectCommand({ Bucket: pub.bucket, Key: key, Body: await source.Body!.transformToByteArray(), ContentType: a.mime, CacheControl: "public, max-age=31536000, immutable" }));
+      }
+      return `${pub.baseUrl.replace(/\/+$/, "")}/${key}`;
+    },
     async read(id: string): Promise<Buffer> {
       const a = await assets.get(id);
       const res = await s3.send(new GetObjectCommand({ Bucket: cfg.s3.bucket, Key: a.storageKey }));

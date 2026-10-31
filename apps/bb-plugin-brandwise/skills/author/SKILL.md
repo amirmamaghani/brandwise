@@ -14,7 +14,7 @@ You write what the editor asks for, exactly, and nothing else. You never approve
 3. Read its `brief` and `params`:
    - `role: control`: the subject is the incumbent `subject` from the params, exactly. Do not improve it.
    - `role: challenger`: take `baseSubject` and apply only the `change` from the params. One change, so the experiment measures one thing.
-4. Hand it in with only the subject line, and nothing else: `bb brandwise editor tasks submit <id> --subject "<subject>"`.
+4. Hand it in with only what is yours, and nothing else: `bb brandwise editor tasks submit <id> --subject "<subject>"`. When the task has `params.template` the e-mail is built from a published template and its `content`: then the control is submitted as it is, and for the challenger you give only the slots to change, `--content '{"cta_label":"Start now"}'` (and `--subject` if the subject is what changes). Everything you do not name stays as in the control.
    The system creates the calendar entry itself (the arm campaign, body, tier and time come from the task), marks the task done and prints the entry id. Do not create calendar entries yourself and do not pick dates.
    If it refuses (for example the challenger equals the incumbent or is too long), fix the subject and submit again.
 

@@ -32,7 +32,8 @@ export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omi
     providers,
     store,
     recipient,
-    connector: (): Connector => emailConnector(providers, store),
+    /** `renderIdFor` links a send to the render snapshot of a template-based entry (from the template library). */
+    connector: (renderIdFor?: (entryId: string) => Promise<string | null>): Connector => emailConnector(providers, store, renderIdFor),
     /** A webhook call: verify, parse, store. A bad signature throws and nothing is stored. */
     webhook: async (providerId: string, req: { headers: Record<string, string | undefined>; body: string }) => ingest(provider(providerId).parseWebhook(req), store),
     /** Replay a saved payload (trusted: no signature check). */

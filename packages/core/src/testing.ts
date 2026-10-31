@@ -10,6 +10,8 @@ export async function purge(core: ReturnType<typeof createCore>, prefix: string)
   await run(`delete from experiment where campaign_id in (${ids})`);
   await run(`delete from email_event where send_id in (select s.id from email_send s join content_calendar c on c.id = s.entry_id where c.campaign_id in (${ids}))`);
   await run(`delete from email_send where entry_id in (select id from content_calendar where campaign_id in (${ids}))`);
+  await run(`delete from email_entry where entry_id in (select id from content_calendar where campaign_id in (${ids}))`);
+  await run(`delete from email_render where template_version_id in (select id from email_template_version where campaign_id in (${ids}))`);
   await run(`delete from content_calendar where campaign_id in (${ids})`);
   await run(`delete from asset where campaign_id in (${ids})`);
   await run("delete from campaign where name like $1 and parent_id is not null");

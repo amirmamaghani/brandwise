@@ -6,7 +6,7 @@
 // reward clickbait that damages the list), and a content-independent share of opens comes from privacy proxies (machine opens).
 import { createHash } from "node:crypto";
 
-export type Features = { length: number; question: boolean; number: boolean; personal: boolean; urgency: boolean; caps: boolean; exclamations: number; emoji: number; links: number; shortBody: boolean };
+export type Features = { length: number; question: boolean; number: boolean; personal: boolean; urgency: boolean; caps: boolean; exclamations: number; emoji: number; links: number; shortBody: boolean; ctaAction: boolean; list: boolean };
 
 const URGENCY = /\b(last chance|hurry|today only|urgent|don'?t miss|ends tonight|final hours|act now)\b/i;
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -23,6 +23,9 @@ export function features(subject: string, body: string): Features {
     emoji: (subject.match(/\p{Extended_Pictographic}/gu) ?? []).length,
     links: (body.match(/https?:\/\//g) ?? []).length,
     shortBody: body.replace(/<[^>]+>/g, "").length < 600,
+    // the label of the first link, when it starts with an action verb ("Start now", "Get the guide")
+    ctaAction: /^(start|get|join|try|book|claim|download|learn|see how)\b/i.test((/<a\s[^>]*href="[^"]*"[^>]*>([\s\S]*?)<\/a>/i.exec(body)?.[1] ?? "").replace(/<[^>]+>/g, "").trim()),
+    list: /<li\b/i.test(body),
   };
 }
 
@@ -32,7 +35,7 @@ export function expectedRates(subject: string, body: string) {
   const openLogit = -1.2 + (f.personal ? 0.35 : 0) + (f.question ? 0.3 : 0) + (f.number ? 0.25 : 0) + (f.urgency ? 0.5 : 0)
     - (f.caps ? 0.25 : 0) - (f.exclamations > 1 ? 0.15 : 0) + (f.emoji === 1 ? 0.15 : 0) - 0.012 * Math.abs(f.length - 42);
   const open = sigmoid(openLogit);
-  const clickGivenOpen = sigmoid(-2.2 + (f.links >= 1 ? 0.5 : 0) + (f.number ? 0.15 : 0) + (f.shortBody ? 0.2 : 0) - (f.urgency ? 0.2 : 0));
+  const clickGivenOpen = sigmoid(-2.2 + (f.links >= 1 ? 0.5 : 0) + (f.number ? 0.15 : 0) + (f.shortBody ? 0.2 : 0) + (f.ctaAction ? 0.3 : 0) + (f.list ? 0.1 : 0) - (f.urgency ? 0.2 : 0));
   return {
     open,
     clickGivenOpen,

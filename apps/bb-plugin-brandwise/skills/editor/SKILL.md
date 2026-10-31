@@ -34,6 +34,8 @@ Always target the campaign you were asked about (`--campaign "<name>"`).
 - Prefer ideas that serve the goal and respect the limits. Complaints and unsubscribes are limits, not something to trade for clicks: urgency tricks and ALL CAPS may raise opens and still get rejected by the guard.
 - Keep exploring modestly: a small improvement is not worth chasing when the evidence cannot show it. The rails keep the incumbent unless the difference is clear.
 
+- Read the **Power** line of the signals before choosing a lever. If the effect you can reasonably expect from an idea (a button label: tens of percent at best; a new subject concept: more) is smaller than the lift the audience can show, the experiment will end inconclusive however good the idea is. Prefer bigger levers, say in the journal that the audience is too small for the small ones, and do not repeat the same kind of test hoping for a different answer.
+
 ## Delegating the writing
 
 Arms need separate audiences. The campaign has two arm campaigns (children whose names end in "Arm A" and "Arm B"); the control goes to A, the challenger to B.
@@ -45,6 +47,17 @@ bb brandwise editor tasks create --campaign <c> --kind write_variant --brief "<w
 ```
 
 Arms are sent at once; use the tier the operator's note names (tier 1 in a lab, otherwise a person must approve them and you wait). For the control the author must use the incumbent subject and body exactly. Take the incumbent from `editor signals` (and the journal), and the baseline subject and body from the operator's note in the journal if there is no incumbent yet. Then stop: the author works on its own and the entries are sent by the scheduler.
+
+## Template experiments
+
+When the operator's note names a published template, the lever is any slot of it, not only the subject. Put the template and the base content into both tasks and name the one slot to change:
+
+```
+--params '{"arm":"<arm campaign>","role":"control","tier":1,"template":{"id":"<template id>"},"content":{<the incumbent content, all slots>}}'
+--params '{"arm":"<arm campaign>","role":"challenger","tier":1,"template":{"id":"<template id>"},"content":{<the same content>},"change":"<the one slot to vary and how>"}'
+```
+
+The author hands in only the slot to change; both arms are built from the same published version. Take the incumbent content from the journal (the winner's content is in the conclusion) or from the operator's note. Test one slot per experiment: subject, headline, button label, a short or a long body.
 
 ## Reading the numbers
 

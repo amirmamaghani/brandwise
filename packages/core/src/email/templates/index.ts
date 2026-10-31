@@ -5,10 +5,21 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MergeDialect } from "../domain/types.ts";
+import type { Brand } from "./domain/types.ts";
 import type { AssetHost, PreviewService, Renderer } from "./domain/ports.ts";
 import { renderTemplate, hasErrors } from "./domain/render.ts";
 import { PREVIEW, type Rendered, type TemplateConfig, type TemplateSource } from "./domain/types.ts";
 import { SEED_BRAND, SEED_CONFIG, SEED_MJML, SEED_SAMPLE } from "./seed.ts";
+
+/** Brand values of the template win over the kit's; objects merge key by key, everything else is replaced. */
+export function mergeBrand(kit: Brand, own: Brand): Brand {
+  const out: Record<string, unknown> = { ...kit };
+  for (const [k, v] of Object.entries(own)) {
+    const base = out[k];
+    out[k] = v && typeof v === "object" && !Array.isArray(v) && base && typeof base === "object" && !Array.isArray(base) ? mergeBrand(base as Brand, v as Brand) : v;
+  }
+  return out as Brand;
+}
 
 export const TEMPLATE_FILES = ["template.mjml", "template.json", "brand.json", "sample.json"] as const;
 export type TemplateFile = (typeof TEMPLATE_FILES)[number];
@@ -21,6 +32,8 @@ export function createTemplates(deps: {
   preview: () => PreviewService;
   assets: AssetHost;
   dialectOf: (providerId: string) => MergeDialect | null;
+  /** The client's brand kit and components for a campaign (inherited down the campaign tree). Without it a template stands alone. */
+  resolve?: (campaignId: string) => Promise<{ brand: Brand; partials: Record<string, string>; hasKit: boolean }>;
 }) {
   /** The folder of a template; ids are checked so a name can never leave the root. */
   const dir = (campaignId: string, id: string) => {
@@ -54,13 +67,15 @@ export function createTemplates(deps: {
         readdirSync(join(root, campaignId)).filter((id) => existsSync(join(root, campaignId, id, "template.mjml"))).map((id) => ({ campaignId, id })));
     },
     /** A new template folder with the starter template. Never overwrites. */
-    seed(campaignId: string, id: string): string {
+    async seed(campaignId: string, id: string): Promise<string> {
       const d = dir(campaignId, id);
+      const kit = await deps.resolve?.(campaignId);
       if (existsSync(d) && readdirSync(d).length > 0) throw new Error(`Template ${id} already exists`);
       mkdirSync(d, { recursive: true });
       writeFileSync(join(d, "template.mjml"), SEED_MJML);
       writeFileSync(join(d, "template.json"), JSON.stringify(SEED_CONFIG, null, 2) + "\n");
-      writeFileSync(join(d, "brand.json"), JSON.stringify(SEED_BRAND, null, 2) + "\n");
+      // with a brand kit the template starts without brand values of its own and inherits the client's; without one it carries a starter brand
+      writeFileSync(join(d, "brand.json"), JSON.stringify(kit?.hasKit ? {} : SEED_BRAND, null, 2) + "\n");
       writeFileSync(join(d, "sample.json"), JSON.stringify(SEED_SAMPLE, null, 2) + "\n");
       return d;
     },
@@ -84,12 +99,14 @@ export function createTemplates(deps: {
       writeFileSync(join(dir(campaignId, id), name), content);
     },
     /** Render the template with its sample content (or the given content) for a target: "preview" or a provider id. */
-    async render(campaignId: string, id: string, opts: { target?: string; content?: Record<string, unknown> } = {}): Promise<Rendered> {
+    async render(campaignId: string, id: string, opts: { target?: string; content?: Record<string, unknown>; locale?: string } = {}): Promise<Rendered> {
       const src = load(campaignId, id);
       const target = opts.target ?? PREVIEW;
       const dialect = target === PREVIEW ? null : deps.dialectOf(target);
       if (target !== PREVIEW && !dialect) throw new Error(`Unknown or unconfigured e-mail provider "${target}"`);
-      return renderTemplate(src, opts.content ?? src.sample, { renderer: deps.renderer(), assets: deps.assets }, { id: target, dialect });
+      const r = await deps.resolve?.(campaignId);
+      const source: TemplateSource = { ...src, brand: mergeBrand(r?.brand ?? {}, src.brand), partials: r?.partials ?? {} };
+      return renderTemplate(source, opts.content ?? src.sample, { renderer: deps.renderer(), assets: deps.assets }, { id: target, dialect }, opts.locale);
     },
     /** A PNG of the preview render, for an agent (or a person) to look at. */
     async picture(campaignId: string, id: string, opts: { width?: number } = {}): Promise<{ png: Uint8Array; rendered: Rendered }> {

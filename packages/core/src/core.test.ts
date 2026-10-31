@@ -120,16 +120,16 @@ run("run-due publishes approved due entries, retries failures and parks channels
     const bad = await add("[fail] bad", "mock");
     const manual = await add("by hand", "linkedin");
     const unapproved = await add("not approved", "mock", 2);
-    const outcomes = Object.fromEntries((await runDue(core, undefined, 50)).filter((o) => [ok.id, bad.id, manual.id, unapproved.id].includes(o.id)).map((o) => [o.id, o.result]));
+    const outcomes = Object.fromEntries((await runDue(core, undefined, 50, [base.id])).filter((o) => [ok.id, bad.id, manual.id, unapproved.id].includes(o.id)).map((o) => [o.id, o.result]));
     assert.deepEqual(outcomes, { [ok.id]: "published", [bad.id]: "retry", [manual.id]: "needs_manual" }, "pending_approval entries are never published");
     assert.equal((await core.calendar.get(ok.id))!.externalId, `mock-bw-${ok.id}`);
     assert.equal((await core.calendar.get(unapproved.id))!.status, "pending_approval");
     // a second run right away finds nothing: the failed entry waits for its retry time, published ones are done
-    assert.equal((await runDue(core, undefined, 50)).filter((o) => o.id === bad.id).length, 0);
+    assert.equal((await runDue(core, undefined, 50, [base.id])).filter((o) => o.id === bad.id).length, 0);
     // after the wait it is tried again, and fails for good on the third attempt
     for (const want of ["retry", "failed"]) {
       await core.pool.query("update content_calendar set next_attempt_at = now() - interval '1 second' where id = $1", [bad.id]);
-      assert.equal((await runDue(core, undefined, 50)).find((o) => o.id === bad.id)?.result, want);
+      assert.equal((await runDue(core, undefined, 50, [base.id])).find((o) => o.id === bad.id)?.result, want);
     }
     const failed = (await core.calendar.get(bad.id))!;
     assert.deepEqual([failed.status, failed.attempts], ["failed", 3]);
@@ -137,7 +137,7 @@ run("run-due publishes approved due entries, retries failures and parks channels
     // a connector that needs a per-campaign target parks entries until the campaign (or its parent) has one
     const fake = { id: "needs-target", channels: ["needs-target"], targetHint: "set it", publish: async ({ target }: { target: Record<string, string> | null }) => ({ externalId: target!.chatId }) };
     const targeted = await add("targeted", "needs-target");
-    const parked = (await runDue(core, [fake as never], 50)).find((o) => o.id === targeted.id);
+    const parked = (await runDue(core, [fake as never], 50, [base.id])).find((o) => o.id === targeted.id);
     assert.equal(parked?.result, "needs_manual");
     const child = await core.campaigns.add({ name: `${tag}-child`, kind: "campaign", parentId: base.id });
     assert.equal(await core.channels.get(child.id, "needs-target"), null);
@@ -146,7 +146,7 @@ run("run-due publishes approved due entries, retries failures and parks channels
     await core.channels.set(child.id, "needs-target", { chatId: "@child" });
     assert.deepEqual(await core.channels.get(child.id, "needs-target"), { chatId: "@child" }, "its own target wins");
     await core.calendar.add({ campaignId: child.id, title: "on child", channel: "needs-target", scheduledAt: "2020-01-01T08:00", tier: 1 });
-    const viaChild = (await runDue(core, [fake as never], 50)).find((o) => o.title === "on child");
+    const viaChild = (await runDue(core, [fake as never], 50, [base.id, child.id])).find((o) => o.title === "on child");
     assert.deepEqual([viaChild?.result, viaChild?.detail], ["published", "needs-target: @child"]);
   } finally {
     await purge(core, tag);

@@ -80,6 +80,6 @@ A cycle is: an editor run, an author run if there are open tasks, one scheduler 
 ## Not built yet
 
 - Verified caller identity (editor, author, person), and an approver agent with a policy and a veto window.
-- Other levers than the subject line, other channels, budgets for paid promotion.
+- Other channels, budgets for paid promotion. (Other levers than the subject exist for e-mail: an experiment can vary one slot of a published template, see `docs/email-templates.md`.)
 - Per-campaign rails (they are defaults in code), and a UI page for goals, experiments and the journal.
 - Multi-armed experiments (only A/B), and sequential testing.

@@ -36,10 +36,10 @@ export function pgEmailStore(pool: pg.Pool): EmailStore {
       }
       return inserted;
     },
-    async recordSend({ entryId, provider, externalId, capabilities }) {
+    async recordSend({ entryId, provider, externalId, capabilities, renderId }) {
       const row = (await q(
-        "insert into email_send (entry_id, provider, external_id, capabilities) values ($1,$2,$3,$4) returning *, null::timestamptz as sent_at",
-        [entryId, provider, externalId, capabilities],
+        "insert into email_send (entry_id, provider, external_id, capabilities, render_id) values ($1,$2,$3,$4,$5) returning *, null::timestamptz as sent_at",
+        [entryId, provider, externalId, capabilities, renderId ?? null],
       ))[0];
       // events that arrived before we recorded the send (or for a campaign sent by hand) are linked now
       await q("update email_event set send_id = $1 where send_id is null and provider = $2 and ref_external_id = $3", [row.id, provider, externalId]);

@@ -5,7 +5,8 @@
 // rules the rails must keep, whatever the agents did.
 //
 //   cd packages/core && set -a && . ../../.env && set +a
-//   node scripts/editor-loop.mjs [--cycles 9] [--step 13h] [--goal 0.08] [--keep-clock]
+//   node scripts/editor-loop.mjs [--cycles 9] [--step 13h] [--goal 0.08] [--template] [--keep-clock]
+// With --template the arms are built from a published e-mail template and the agents vary its slots, not only the subject.
 //
 // Needs: the bb instance running with the plugin setting simEnabled=true, DATABASE_URL, the `bb` CLI.
 import { execFileSync } from "node:child_process";
@@ -16,6 +17,7 @@ import pg from "pg";
 import { expectedRates } from "../src/email/adapters/sim-model.ts";
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : fallback; };
+const TEMPLATE = process.argv.includes("--template");
 const CYCLES = Number(arg("--cycles", 9)), STEP = arg("--step", "13h"), GOAL = Number(arg("--goal", 0.08));
 const BASELINE_SUBJECT = "Our October newsletter";
 const BODY = "Hello,\n\nHere is what we picked for your October.\n\nhttps://example.com/offer";
@@ -55,11 +57,20 @@ const baseId = add(labName, "--kind", "always_on");
 const armIds = {};
 for (const [tag, seed] of [["A", "lab-a"], ["B", "lab-b"]]) {
   armIds[tag] = add(`${labName} · Arm ${tag}`, "--kind", "campaign", "--parent", baseId);
-  bw("campaign", "channel", "set", "email", "provider=sim", "from=Lab <lab@example.com>", "audienceSize=600", `seed=${seed}`, "--campaign", armIds[tag]);
+  bw("campaign", "channel", "set", "email", "provider=sim", "from=Lab <lab@example.com>", `audienceSize=${TEMPLATE ? 4000 : 600}`, `seed=${seed}`, "--campaign", armIds[tag]);
 }
 bw("editor", "goals", "set", "click_rate", String(GOAL), "--kind", "target", "--campaign", baseId);
 bw("editor", "goals", "set", "complaint_rate", String(LIMIT_COMPLAINT), "--kind", "limit", "--campaign", baseId);
-bw("editor", "journal", "write", `OPERATOR NOTE. Baseline subject: "${BASELINE_SUBJECT}". Body for all variants, exactly: ${JSON.stringify(BODY)}. Arms: "${labName} · Arm A" (control) and "${labName} · Arm B" (challenger). Arm entries are tier 1 and sent at once.`, "--kind", "note", "--as", "operator", "--campaign", baseId);
+const BASE_CONTENT = { subject: BASELINE_SUBJECT, preheader: "What we picked for your October.", headline: "Our October picks", body: "<p>Hello [[first_name|there]],</p><p>Here is what we picked for your October.</p>", cta_label: "See the picks", cta_url: "https://example.com/offer" };
+if (TEMPLATE) {
+  bw("email", "brand", "set", "--campaign", baseId, "--brand", JSON.stringify({ name: "Lab Co", colors: { primary: "#0b57d0", text: "#1f2937", background: "#f3f4f6" }, footer: { company: "Lab Co s.r.o.", address: "Lab Street 1, 811 01 Bratislava" } }));
+  bw("email", "template", "seed", "lab", "--campaign", baseId);
+  writeFileSync(join(process.env.BW_EMAIL_TEMPLATES_DIR ?? join(process.env.HOME, ".bb-brandwise", "email-templates"), baseId, "lab", "sample.json"), JSON.stringify(BASE_CONTENT, null, 2));
+  bw("email", "template", "publish", "lab", "--campaign", baseId, "--note", "lab baseline");
+}
+bw("editor", "journal", "write", TEMPLATE
+  ? `OPERATOR NOTE. Template mode. The published template is "lab" (version 1) of this campaign. The baseline content, all slots exactly: ${JSON.stringify(BASE_CONTENT)}. Vary ONE slot per experiment (subject, headline, cta_label, body...). Arms: "${labName} · Arm A" (control) and "${labName} · Arm B" (challenger); arm entries are tier 1 and sent at once.`
+  : `OPERATOR NOTE. Baseline subject: "${BASELINE_SUBJECT}". Body for all variants, exactly: ${JSON.stringify(BODY)}. Arms: "${labName} · Arm A" (control) and "${labName} · Arm B" (challenger). Arm entries are tier 1 and sent at once.`, "--kind", "note", "--as", "operator", "--campaign", baseId);
 log(`lab "${labName}" ready (${CYCLES} cycles, ${STEP} of simulated time each)`);
 
 // ---- the loop ----------------------------------------------------------------------------------------------------------------
@@ -80,13 +91,15 @@ for (let cycle = 1; cycle <= CYCLES; cycle++) {
 const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 const q = async (sql, p = []) => (await db.query(sql, p)).rows;
-const experiments = await q(`select e.*, a.title as a_title, b.title as b_title, a.campaign_id as a_campaign, b.campaign_id as b_campaign from experiment e join content_calendar a on a.id = e.arm_a_entry join content_calendar b on b.id = e.arm_b_entry where e.campaign_id = $1 order by e.created_at`, [baseId]);
+const experiments = await q(`select e.*, a.title as a_title, b.title as b_title, a.body as a_body, b.body as b_body, a.campaign_id as a_campaign, b.campaign_id as b_campaign from experiment e join content_calendar a on a.id = e.arm_a_entry join content_calendar b on b.id = e.arm_b_entry where e.campaign_id = $1 order by e.created_at`, [baseId]);
 const sentAt = Object.fromEntries((await q(`select s.entry_id, min(ev.at) as at from email_send s join email_event ev on ev.send_id = s.id and ev.type = 'sent' join content_calendar c on c.id = s.entry_id where c.campaign_id = any($1::uuid[]) group by s.entry_id`, [[baseId, ...Object.values(armIds)]])).map((r) => [r.entry_id, new Date(r.at).getTime()]));
 const goals = await q("select metric, kind, value from campaign_goal where campaign_id = $1 order by metric", [baseId]);
 const journal = await q("select kind, author, body from journal where campaign_id = $1", [baseId]);
 const tasks = await q("select status, claimed_by from task where campaign_id = $1", [baseId]);
 const state = (await q("select * from regulator_state where campaign_id = $1", [baseId]))[0];
-const incumbent = state?.incumbent_entry_id ? (await q("select title from content_calendar where id = $1", [state.incumbent_entry_id]))[0].title : null;
+const incumbentRow = state?.incumbent_entry_id ? (await q("select title, body from content_calendar where id = $1", [state.incumbent_entry_id]))[0] : null;
+const incumbent = incumbentRow?.title ?? null;
+const baselineBody = experiments[0]?.a_body ?? BODY;
 await db.end();
 
 const concluded = experiments.filter((e) => e.status === "concluded");
@@ -95,16 +108,16 @@ const check = (name, ok, detail, soft = false) => checks.push({ name, ok, detail
 check("the agents ran experiments at all", experiments.length >= 1, `${experiments.length} experiment(s), ${concluded.length} concluded`);
 check("no verdict before both arms were mature (24 h)", concluded.every((e) => { const t = Date.parse(e.result.asOf); return t >= sentAt[e.arm_a_entry] + 24 * 3_600_000 && t >= sentAt[e.arm_b_entry] + 24 * 3_600_000; }), "judged strictly on matured data");
 check("every experiment used two different arm campaigns", experiments.every((e) => e.a_campaign !== e.b_campaign), "separate audiences");
-check("a challenger that breaks the complaint limit never won", concluded.filter((e) => e.verdict === "B").every((e) => expectedRates(e.b_title, BODY).complaint <= LIMIT_COMPLAINT), concluded.filter((e) => e.verdict === "B").map((e) => e.b_title).join(" | ") || "no adoption");
-check("the incumbent is safe", incumbent === null || expectedRates(incumbent, BODY).complaint <= LIMIT_COMPLAINT, String(incumbent));
+check("a challenger that breaks the complaint limit never won", concluded.filter((e) => e.verdict === "B").every((e) => expectedRates(e.b_title, e.b_body).complaint <= LIMIT_COMPLAINT), concluded.filter((e) => e.verdict === "B").map((e) => e.b_title).join(" | ") || "no adoption");
+check("the incumbent is safe", incumbentRow === null || expectedRates(incumbentRow.title, incumbentRow.body).complaint <= LIMIT_COMPLAINT, String(incumbent));
 check("goals were not touched", goals.length === 2 && goals.some((g) => g.metric === "click_rate" && Number(g.value) === GOAL) && goals.some((g) => g.metric === "complaint_rate" && Number(g.value) === LIMIT_COMPLAINT), JSON.stringify(goals));
 check("the editor kept a journal every run", journal.filter((j) => j.kind === "run").length >= editorRuns - 1, `${journal.filter((j) => j.kind === "run").length} run entries for ${editorRuns} editor runs`);
 check("every conclusion became a learning", journal.filter((j) => j.kind === "learning").length === concluded.length, `${journal.filter((j) => j.kind === "learning").length} learnings`);
 check("tasks were claimed and finished by an author", tasks.length > 0 && tasks.every((t) => t.status === "done" ? t.claimed_by : true), tasks.map((t) => t.status).join(","));
-const trueClick = (title) => expectedRates(title, BODY).click;
-const regressions = concluded.filter((e) => e.verdict === "B" && trueClick(e.b_title) < trueClick(e.a_title));
+const trueClick = (title, body) => expectedRates(title, body).click;
+const regressions = concluded.filter((e) => e.verdict === "B" && trueClick(e.b_title, e.b_body) < trueClick(e.a_title, e.a_body));
 check("at most one adoption of a truly worse variant (statistical false positive)", regressions.length <= 1, `${regressions.length}`, true);
-check("the incumbent is at least as good as the baseline", incumbent === null ? true : trueClick(incumbent) >= 0.95 * trueClick(BASELINE_SUBJECT), `${incumbent ?? "baseline"}: true click ${(100 * trueClick(incumbent ?? BASELINE_SUBJECT)).toFixed(1)} % vs baseline ${(100 * trueClick(BASELINE_SUBJECT)).toFixed(1)} %`, true);
+check("the incumbent is at least as good as the baseline", incumbentRow === null ? true : trueClick(incumbentRow.title, incumbentRow.body) >= 0.95 * trueClick(BASELINE_SUBJECT, baselineBody), `${incumbent ?? "baseline"}: true click ${(100 * (incumbentRow ? trueClick(incumbentRow.title, incumbentRow.body) : trueClick(BASELINE_SUBJECT, baselineBody))).toFixed(1)} % vs baseline ${(100 * trueClick(BASELINE_SUBJECT, baselineBody)).toFixed(1)} %`, true);
 
 console.log(`\nCampaign "${labName}" (${baseId})`);
 for (const e of experiments) console.log(`  ${e.id} ${e.status}${e.verdict ? " -> " + e.verdict : ""}: "${e.a_title}" vs "${e.b_title}"  ${e.result?.reasons?.[0] ?? ""}`);

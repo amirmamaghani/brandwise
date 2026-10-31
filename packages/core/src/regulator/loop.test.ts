@@ -156,16 +156,16 @@ run("arms must have separate audiences; tasks are claimed once", async () => {
     const arm = await core.campaigns.add({ name: `${prefix}-arm`, kind: "campaign", parentId: base.id });
     const params = { arm: arm.name, role: "challenger", tier: 1, baseSubject: "Our October newsletter", body: BODY };
     const v1 = await reg.tasks.create(base.id, "editor", { kind: "write_variant", brief: "b", params });
-    await assert.rejects(reg.tasks.submitVariant(v1.id, "A subject", "author-1"), /claim it first/);
+    await assert.rejects(reg.tasks.submitVariant(v1.id, { subject: "A subject" }, "author-1"), /claim it first/);
     await reg.tasks.claim(v1.id, "author-1");
-    await assert.rejects(reg.tasks.submitVariant(v1.id, "Our October newsletter", "author-1"), /must differ/);
-    await assert.rejects(reg.tasks.submitVariant(v1.id, "x".repeat(71), "author-1"), /3 to 70/);
-    const done = await reg.tasks.submitVariant(v1.id, "3 ideas for your October", "author-1");
+    await assert.rejects(reg.tasks.submitVariant(v1.id, { subject: "Our October newsletter" }, "author-1"), /must differ/);
+    await assert.rejects(reg.tasks.submitVariant(v1.id, { subject: "x".repeat(71) }, "author-1"), /3 to 70/);
+    const done = await reg.tasks.submitVariant(v1.id, { subject: "3 ideas for your October" }, "author-1");
     const entry = await core.calendar.get((done.result as { entry: string }).entry);
     assert.deepEqual([entry?.campaignId, entry?.channel, entry?.tier, entry?.body, entry?.status], [arm.id, "email", 1, BODY, "approved"]);
     const ctl = await reg.tasks.create(base.id, "editor", { kind: "write_variant", brief: "b", params: { ...params, role: "control", subject: "Our October newsletter" } });
     await reg.tasks.claim(ctl.id, "author-1");
-    const c = await reg.tasks.submitVariant(ctl.id, "something else entirely", "author-1");
+    const c = await reg.tasks.submitVariant(ctl.id, { subject: "something else entirely" }, "author-1");
     assert.equal((c.result as { subject: string }).subject, "Our October newsletter", "the control always uses the incumbent subject");
   } finally {
     await cleanup();

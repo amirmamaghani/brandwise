@@ -1,6 +1,7 @@
 // Lint rules: small deterministic checks of a rendered e-mail. An `error` blocks approval, a `warn` is shown, an `info` is a hint.
 // A rule gets everything it may need and returns findings; adding a rule is adding a function to RULES.
 import type { MergeDialect } from "../../domain/types.ts";
+import { contrast } from "./color.ts";
 import { tokensIn } from "./dialect.ts";
 import type { Brand, Finding, TemplateConfig } from "./types.ts";
 
@@ -66,6 +67,18 @@ export const RULES: ((c: LintContext) => Finding[])[] = [
   (c) => {
     const raw = [...c.mjml.matchAll(/\{\{\{\s*([\w.]+)\s*\}\}\}/g)].map((m) => m[1]).filter((name) => c.config.slots[name]?.type !== "richtext-lite" && !name.startsWith("brand."));
     return raw.map((n) => f("raw-slot", "error", `{{{${n}}}} prints a slot without escaping; only richtext-lite slots may be written with three braces`));
+  },
+  (c) => {
+    const colors = c.brand.colors ?? {};
+    const pairs: [string, string | undefined, string, string][] = [
+      ["text", colors.text, "#ffffff", "the text colour on the white card"],
+      ["text", colors.text, colors.background ?? "", "the text colour on the page background"],
+      ["primary", "#ffffff", colors.primary ?? "", "white button text on the primary colour"],
+    ];
+    return pairs.flatMap(([, fg, bg, what]) => {
+      const ratio = fg && bg ? contrast(fg, bg) : null;
+      return ratio !== null && ratio < 4.5 ? [f("contrast", "warn", `${what} has a contrast of ${ratio.toFixed(1)}:1; accessibility asks for 4.5:1`)] : [];
+    });
   },
   (c) => SPAM.filter((w) => c.subject.toLowerCase().includes(w)).map((w) => f("spam-words", "warn", `the subject contains "${w}", a phrase spam filters dislike`)),
 ];

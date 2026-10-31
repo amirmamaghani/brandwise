@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 type Ref = { campaignId: string; id: string };
 type Finding = { rule: string; severity: "error" | "warn" | "info"; message: string };
+type Version = { version: number; note: string | null; createdBy: string; createdAt: string };
 type Render = { html: string; subject: string; preheader: string; size: number; hash: string; findings: Finding[] };
 const FILES = ["template.mjml", "template.json", "brand.json", "sample.json"];
 const FIELD = "h-8 rounded-md border border-input bg-background px-2 text-sm";
@@ -33,6 +34,8 @@ export function EmailPage({ subPath }: PluginNavPanelProps) {
   const [creating, setCreating] = useState(false);
   const [newCampaign, setNewCampaign] = useState("");
   const [newId, setNewId] = useState("");
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [versionNote, setVersionNote] = useState("");
   const [to, setTo] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,6 +74,17 @@ export function EmailPage({ subPath }: PluginNavPanelProps) {
     return () => { live = false; clearInterval(t); };
   }, [current, rpc, draw]);
 
+  const loadVersions = useCallback(async (t: Ref) => { try { setVersions((await rpc.call("email_template_versions", t)).versions); } catch (cause) { report(cause); } }, [rpc, report]);
+  useEffect(() => { setVersions([]); if (current) void loadVersions(current); }, [current, loadVersions]);
+  const publish = async () => {
+    if (!current) return;
+    setBusy(true); setNote(null);
+    try {
+      const r = await rpc.call("email_template_publish", { ...current, note: versionNote.trim() || undefined });
+      setNote(r.created ? `Published version ${r.version}` : `Nothing changed since version ${r.version}`);
+      setVersionNote(""); setError(null); await loadVersions(current);
+    } catch (cause) { report(cause); } finally { setBusy(false); }
+  };
   const pick = async (name: string) => {
     if (!current) return;
     setFile(name); setDirty(false);
@@ -153,6 +167,17 @@ export function EmailPage({ subPath }: PluginNavPanelProps) {
                 </>
               ) : <p className="text-xs text-muted-foreground">Pick a file to edit it by hand.</p>}
             </section>
+            <section className="flex flex-col gap-1 rounded-xl border border-border p-2" aria-label="Versions">
+              <h2 className="text-sm font-medium">Versions <span className="text-xs font-normal text-muted-foreground">{versions.length === 0 ? "not published yet" : `latest v${versions[0].version}`}</span></h2>
+              <p className="text-xs text-muted-foreground">Entries use a published version, which never changes. Publishing checks the sample first.</p>
+              <ul className="space-y-0.5 text-xs">
+                {versions.slice(0, 5).map((v) => <li key={v.version}><b>v{v.version}</b> {v.createdAt.slice(0, 16).replace("T", " ")} {v.note ?? ""}</li>)}
+              </ul>
+              <div className="flex items-center gap-2">
+                <Input className="h-8 flex-1" value={versionNote} onChange={(e) => setVersionNote(e.target.value)} placeholder="what changed (optional)" aria-label="Version note" />
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void publish()}>Publish</Button>
+              </div>
+            </section>
             <form onSubmit={sendTest} className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-2" aria-label="Test e-mail">
               <Input className="h-8 min-w-40 flex-1" type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="send a test to…" aria-label="Test address" />
               <Button type="submit" size="sm" variant="outline" disabled={busy || to === ""}>Send test</Button>
@@ -162,5 +187,24 @@ export function EmailPage({ subPath }: PluginNavPanelProps) {
         </div>
       )}
     </div>
+  );
+}
+
+/** On the approval card of an e-mail entry made from a template: what the reader will see, exactly as it will be sent, and what lint said. */
+export function EntryEmailPreview({ entryId }: { entryId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [r, setR] = useState<Awaited<ReturnType<typeof rpc.call<"email_entry_preview">>> | null>(null);
+  useEffect(() => { let live = true; rpc.call("email_entry_preview", { entryId }).then((x) => live && setR(x), () => {}); return () => { live = false; }; }, [rpc, entryId]);
+  if (!r || !r.bound) return null;
+  const errors = r.findings.filter((f) => f.severity === "error").length, warns = r.findings.filter((f) => f.severity === "warn").length;
+  return (
+    <details className="rounded-md border border-border p-2" open>
+      <summary className="cursor-pointer text-sm font-medium">E-mail preview <span className="text-xs font-normal text-muted-foreground">template {r.template} v{r.version}, {r.locale}, {errors} errors, {warns} warnings</span></summary>
+      <p className="mt-1 text-xs text-muted-foreground">Subject: <span className="text-foreground">{r.subject}</span></p>
+      <iframe title="E-mail preview" sandbox="" srcDoc={r.html} className="mt-1 h-80 w-full rounded-md border border-border bg-white" />
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {r.findings.filter((f) => f.severity !== "info").map((f, i) => <li key={i} className={TONE[f.severity]}><b>{f.severity}</b> {f.rule}: {f.message}</li>)}
+      </ul>
+    </details>
   );
 }

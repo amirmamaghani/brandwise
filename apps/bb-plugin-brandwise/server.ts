@@ -225,6 +225,8 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     section("email-templates", "E-mail templates", "The optional engine behind the E-mail page: MJML and a headless Chrome for pictures.", {
       emailEnginePath: { type: "string", label: "Engine folder", description: "Folder of @brandwise/email-engine (MJML, puppeteer). Empty = the e-mail template commands are off.", default: "" },
+      publicAssetBucket: { type: "string", label: "Public image bucket", description: "A bucket whose objects anyone can read. Images in sent e-mails are copied here once, under a permanent address. Empty = e-mails with stored images cannot be sent yet.", default: "" },
+      publicAssetBaseUrl: { type: "string", label: "Public image address", description: "The public address of that bucket or of the CDN in front of it, e.g. https://cdn.example.com.", default: "" },
       chromePath: { type: "string", label: "Chrome", description: "Path of a Chrome or Chrome Headless Shell for pictures of e-mails. Empty = the one of the video engine, or a Chrome installed on this machine.", default: "" },
     }),
     section("telegram", "Telegram", "The channel the BrandWise posts to.", {
@@ -293,7 +295,7 @@ export default async function plugin(bb: BbPluginApi) {
     sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
   });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email }) : null;
+  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library() }) : null;
   const editorCli = createEditorCli({ core: need, regulator: () => regulator });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
   const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
@@ -430,7 +432,7 @@ export default async function plugin(bb: BbPluginApi) {
     bb, need, enginePath: () => cfg.videoEnginePath, assetsChanged: () => bb.realtime.publish(ASSETS_CHANGED, {}),
   });
 
-  const emailTemplates = createEmailTemplates({ need, email: () => email, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath });
+  const emailTemplates = createEmailTemplates({ need, email: () => email, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath, publicAssets: () => (cfg.publicAssetBucket && cfg.publicAssetBaseUrl ? { bucket: cfg.publicAssetBucket, baseUrl: cfg.publicAssetBaseUrl } : null) });
   const agents = createAgents({ bb, need, video: video.agentContext, email: emailTemplates.agentContext, assignThread });
 
   // Display mode: applied once per change of the setting, on `mode set` / the Settings switch, and on `mode apply`.
@@ -732,9 +734,12 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
     "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on e-mail; the rails judge, nobody can overrule)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
-    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" | complete <id> [--result '<json>']",
+    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] | complete <id> [--result '<json>']",
     "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
     "  bb brandwise sim status | advance <90m|24h|2d> | reset   (development clock for the simulated provider)",
+    "  bb brandwise email brand [set --brand '<json>' | --file <f>] | component [set <name> --file <full path of an .mjml file> or --mjml '<inline mjml>' | remove <name>]   (the client's brand kit and MJML components, inherited by child campaigns; add --campaign <c>)",
+    "  bb brandwise email template publish <id> [--note \"...\"] | versions <id> | links <id>   (immutable versions; entries use a published version)",
+    "  bb brandwise email entry create --template <id> [--version n] --at <ISO> --tier <1|2|3> --content '<json>' [--locale cs] [--campaign <c>] | bind <entry-id> --template <id> --content '<json>' | show <entry-id>",
     "  bb brandwise email template seed <id> | list | render <id> [--target preview|resend] [--raw] | lint <id> | preview <id> [--width 640] | send-test <id> --to <address> [--provider <id>]   (e-mail templates: MJML layout, slots, brand; add --campaign <c>; preview writes a PNG you can open)",
     "  bb brandwise email stats <entry-id> | --campaign <c>   (opens, clicks, bounces... of sent e-mail campaigns, the same for every provider)",
     "  bb brandwise email ingest --provider <id> --file <payload.json>   (replay a saved webhook payload)",
@@ -764,7 +769,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -937,7 +942,7 @@ export default async function plugin(bb: BbPluginApi) {
     commands: [
       { name: "editor", summary: "The editor-in-chief regulator: signals, experiments, journal, tasks", usage: "bb brandwise editor signals|experiments|journal|tasks|goals ..." },
       { name: "sim", summary: "Development clock for the simulated e-mail provider", usage: "bb brandwise sim status|advance|reset" },
-      { name: "email", summary: "E-mail campaign statistics, event replay and e-mail templates", usage: "bb brandwise email stats|ingest|template ..." },
+      { name: "email", summary: "E-mail campaign statistics, event replay and e-mail templates", usage: "bb brandwise email stats|ingest|template|brand|component|entry ..." },
       { name: "campaign", summary: "List or add campaigns (an always-on base or a time-bound campaign)", usage: "bb brandwise campaign list|add|channel|assign|unassign ..." },
       { name: "calendar", summary: "List, add, edit, send back, approve, withdraw approval of or cancel calendar entries", usage: "bb brandwise calendar list|add|edit|request-changes|unapprove|approve|cancel|run-due ..." },
       { name: "assets", summary: "Add, download (Instagram, TikTok, YouTube), list or sign assets stored in S3", usage: "bb brandwise assets add|download|download-photos|list|url ..." },
@@ -1026,7 +1031,7 @@ export default async function plugin(bb: BbPluginApi) {
           if (done.length > 0) await changed();
           return json ? reply(done, "") : { exitCode: done.some((o) => o.result === "failed") ? 1 : 0, stdout: done.map((o) => `${o.result.padEnd(12)} ${o.id}  ${o.channel}  ${o.title}  ${o.detail}`).join("\n") };
         }
-        if (area === "email" && action === "template") return emailTemplates.cli(args, { val, positional, reply, usage });
+        if (area === "email" && (action === "template" || action === "brand" || action === "component" || action === "entry")) return emailTemplates.cli(args, { val, positional, reply, usage });
         if (area === "email" && action === "stats") {
           if (email === null) return { exitCode: 1, stderr: "Not configured: run infra/bb-instance/provision.sh apply" };
           const entryId = positional(args.slice(2))[0];

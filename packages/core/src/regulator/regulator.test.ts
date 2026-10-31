@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { expectedRates } from "../email/adapters/sim-model.ts";
 import { DEFAULT_RAILS, canPropose, judge, type ArmData } from "./rails.ts";
-import { compareRates, normalCdf, wilson } from "./stats.ts";
+import { compareRates, minDetectableLift, normalCdf, wilson } from "./stats.ts";
 
 const R = DEFAULT_RAILS;
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -16,6 +16,18 @@ test("stats: normal CDF, Wilson interval and the two-proportion test agree with 
   const c = compareRates(30, 1000, 50, 1000);
   assert.ok(c.p < 0.03 && c.p > 0.01 && c.lift !== null && Math.abs(c.lift - 2 / 3) < 1e-9);
   assert.ok(compareRates(30, 1000, 31, 1000).p > 0.8, "a one-click difference is noise");
+});
+
+test("power: what an audience can show, and that the test agrees with it", () => {
+  const mde = minDetectableLift(0.03, 600)!;
+  assert.ok(mde > 0.8 && mde < 1.0, `about +90 % at 600 per arm and a 3 % rate, got ${mde}`);
+  assert.ok(minDetectableLift(0.03, 6000)! < mde / 3, "ten times the audience, a third of the lift");
+  assert.equal(minDetectableLift(0, 600), null);
+  // a lift just above the minimum is significant with that audience, one well below it is not
+  const n = 2000, base = 60, k = (lift: number) => Math.round(base * (1 + lift));
+  const mdeN = minDetectableLift(base / n, n)!;
+  assert.ok(compareRates(base, n, k(mdeN * 1.2), n).p < 0.05);
+  assert.ok(compareRates(base, n, k(mdeN * 0.4), n).p > 0.05);
 });
 
 test("judge: waits for maturity, then decides; a keep (A) is the default", () => {
@@ -54,6 +66,14 @@ test("canPropose: frozen, one running at a time, cooldown after an adoption", ()
   assert.match(canPropose({ ...ok, running: 1 }, at(0), R).reason!, /one variable at a time/);
   assert.match(canPropose({ ...ok, lastAdoptedAt: T0 }, at(10), R).reason!, /cooldown/);
   assert.equal(canPropose({ ...ok, lastAdoptedAt: T0 }, at(25), R).ok, true);
+});
+
+test("sim world: the button label and a list matter, not only the subject", () => {
+  const html = (label: string, list = "") => `<p>Hello</p>${list}<a href="https://example.com/x">${label}</a>`;
+  const plain = expectedRates("Our October newsletter", html("See the picks"));
+  assert.ok(expectedRates("Our October newsletter", html("Start the picks")).click > plain.click * 1.1, "an action verb on the button helps");
+  assert.ok(expectedRates("Our October newsletter", html("See the picks", "<ul><li>a</li></ul>")).click > plain.click, "a list helps a little");
+  assert.equal(expectedRates("Our October newsletter", html("See the picks")).open, plain.open, "and neither changes who opens");
 });
 
 test("sim world: the oracle ranks variants, and clickbait buys opens with complaints", () => {

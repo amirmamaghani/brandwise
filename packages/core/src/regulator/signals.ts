@@ -2,7 +2,7 @@
 // Rates are smoothed over the last few MATURE sends (a filter against noise) and always come with sample size and an interval.
 import type { Counts } from "../email/domain/types.ts";
 import { brokenGuard, canPropose, isMature, judge, matureAt, type ArmData, type ProposalState, type Rails, type Verdict } from "./rails.ts";
-import { wilson } from "./stats.ts";
+import { minDetectableLift, wilson } from "./stats.ts";
 
 export const GOAL_METRICS = ["click_rate", "complaint_rate", "unsubscribe_rate", "bounce_rate"] as const;
 export type GoalMetric = (typeof GOAL_METRICS)[number];
@@ -23,6 +23,8 @@ export type Signals = {
   goals: { metric: GoalMetric; kind: "target" | "limit"; value: number; current: number | null; sample: number; gap: number | null; ok: boolean | null }[];
   recent: { entryId: string; title: string; sentAt: string | null; mature: boolean; maturesAt: string | null; delivered: number; clickRate: number | null; clickRateCi: [number, number] | null; complaintRate: number | null; unsubscribeRate: number | null; guard: string | null }[];
   experiments: { running: (ExperimentView & { verdict: string; reasons: string[]; readyAt: string | null })[]; recentlyConcluded: ExperimentView[] };
+  /** What the current audience size can show: effects smaller than `minDetectableLift` end inconclusive. */
+  power: { deliveredPerArm: number; clickRate: number; minDetectableLift: number } | null;
   allowed: { proposeExperiment: { ok: boolean; reason: string | null } };
   notes: string[];
 };
@@ -64,6 +66,12 @@ export function buildSignals(input: {
       return { entryId: s.entryId, title: s.title, sentAt: s.sentAt, mature: isMature(a, asOf, rails), maturesAt: matureAt(s.sentAt, rails), delivered: a.delivered, clickRate: a.delivered > 0 ? a.clicks / a.delivered : null, clickRateCi: ci ? [ci.low, ci.high] : null, complaintRate: a.delivered > 0 ? a.complaints / a.delivered : null, unsubscribeRate: a.delivered > 0 ? a.unsubscribes / a.delivered : null, guard: brokenGuard(a, rails) };
     }),
     experiments: { running, recentlyConcluded: experiments.filter((e) => e.status === "concluded").slice(0, 5) },
+    power: (() => {
+      const n = window.length ? Math.round(pooled.delivered / window.length) : 0;
+      const rate = pooled.delivered > 0 ? pooled.clicks / pooled.delivered : 0;
+      const mde = minDetectableLift(rate, n);
+      return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde };
+    })(),
     allowed: { proposeExperiment: canPropose({ ...input.state, running: running.length }, asOf, rails) },
     notes,
   };

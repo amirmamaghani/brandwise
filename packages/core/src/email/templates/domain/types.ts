@@ -9,7 +9,8 @@ export type SlotDef =
   | { type: "list"; required?: boolean; max?: number }
   | { type: "enum"; required?: boolean; values: string[] };
 
-export type TemplateConfig = { name: string; slots: Record<string, SlotDef> };
+/** `locales` is optional: when set, content may only be written in these languages. */
+export type TemplateConfig = { name: string; locales?: string[]; slots: Record<string, SlotDef> };
 
 /** Design tokens and fixed brand content of a client. Free-form for the template; the footer and the link allowlist are checked. */
 export type Brand = {
@@ -23,7 +24,8 @@ export type Brand = {
   [key: string]: unknown;
 };
 
-export type TemplateSource = { mjml: string; config: TemplateConfig; brand: Brand; sample: Record<string, unknown> };
+/** `partials` are the client's components, usable in the layout as {{> name}}. */
+export type TemplateSource = { mjml: string; config: TemplateConfig; brand: Brand; sample: Record<string, unknown>; partials?: Record<string, string> };
 
 /** Slot value of an image: an asset id or an http(s) URL, and its alt text. */
 export type ImageValue = { asset: string; alt: string };

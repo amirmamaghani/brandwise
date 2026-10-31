@@ -5,7 +5,7 @@ import type { Connector } from "../publish.ts";
 import type { EmailProvider, EmailStore } from "./domain/ports.ts";
 import { renderEmail } from "./domain/render.ts";
 
-export function emailConnector(providers: EmailProvider[], store: EmailStore): Connector {
+export function emailConnector(providers: EmailProvider[], store: EmailStore, renderIdFor?: (entryId: string) => Promise<string | null>): Connector {
   const find = (id: string | undefined) => {
     const p = id ? providers.find((x) => x.id === id) : providers.length === 1 ? providers[0] : undefined;
     if (!p?.sender) throw new Error(id ? `E-mail provider "${id}" is not configured (has no credentials)` : `Say which e-mail provider the campaign uses: provider=${providers.map((x) => x.id).join("|")}`);
@@ -26,7 +26,7 @@ export function emailConnector(providers: EmailProvider[], store: EmailStore): C
           name: `${entry.campaignName}: ${entry.title}`.slice(0, 200), subject: entry.title, html, text: text || undefined,
           from: t.from, replyTo: t.replyTo || undefined, target: t, tags: { bw_entry: entry.id },
         });
-        send = await store.recordSend({ entryId: entry.id, provider: provider.id, externalId, capabilities: provider.capabilities });
+        send = await store.recordSend({ entryId: entry.id, provider: provider.id, externalId, capabilities: provider.capabilities, renderId: await renderIdFor?.(entry.id) });
       }
       // a retry after a failure that came late: if the provider already took it, do not send twice
       const status = await provider.sender.status?.(send.externalId);

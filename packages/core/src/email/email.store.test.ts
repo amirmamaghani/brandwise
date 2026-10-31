@@ -31,11 +31,11 @@ run("e-mail end to end, with a retry and a provider swap", async () => {
     const one = await add("one");
     const send = a.sender!.send;
     a.sender!.send = async () => { throw new Error("provider down"); };
-    assert.equal((await runDue(core, [email.connector()], 50)).find((o) => o.id === one.id)?.result, "retry");
+    assert.equal((await runDue(core, [email.connector()], 50, [base.id])).find((o) => o.id === one.id)?.result, "retry");
     assert.equal(a.campaigns.size, 1);
     a.sender!.send = send;
     await core.pool.query("update content_calendar set next_attempt_at = now() - interval '1 second' where id = $1", [one.id]);
-    const retried = (await runDue(core, [email.connector()], 50)).find((o) => o.id === one.id);
+    const retried = (await runDue(core, [email.connector()], 50, [base.id])).find((o) => o.id === one.id);
     assert.deepEqual([retried?.result, a.campaigns.size], ["published", 1], "one campaign only");
     assert.match((await core.calendar.get(one.id))!.externalId ?? "", new RegExp(`^memory:${run}-a-`));
     assert.ok([...a.campaigns.values()][0].html.includes("{{unsubscribe}}") && [...a.campaigns.values()][0].html.includes(`utm_campaign=${one.id}`));
@@ -57,7 +57,7 @@ run("e-mail end to end, with a retry and a provider swap", async () => {
     // 4) swap the provider for the next campaign: the old statistics stay, the report adds both
     await core.channels.set(base.id, "email", { provider: "memory-b", from: "News <news@example.com>" });
     const two = await add("two");
-    assert.equal((await runDue(core, [email.connector()], 50)).find((o) => o.id === two.id)?.result, "published");
+    assert.equal((await runDue(core, [email.connector()], 50, [base.id])).find((o) => o.id === two.id)?.result, "published");
     await ingest(b.outbox, email.store);
     const all = await email.stats({ campaignId: base.id });
     assert.deepEqual(all.sends.map((s) => s.provider), ["memory", "memory-b"]);

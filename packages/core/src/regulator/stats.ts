@@ -16,6 +16,15 @@ export function wilson(k: number, n: number, z = 1.96): { low: number; high: num
   return { low: Math.max(0, centre - half), high: Math.min(1, centre + half) };
 }
 
+/**
+ * The smallest relative lift (0.3 = 30 %) an A/B test with `nPerArm` recipients per arm can show reliably (two-sided 5 % significance,
+ * 80 % power) when the base rate is `rate`. Smaller effects will end inconclusive however real they are: the experiment is underpowered.
+ */
+export function minDetectableLift(rate: number, nPerArm: number): number | null {
+  if (!(rate > 0) || rate >= 1 || nPerArm <= 0) return null;
+  return ((1.96 + 0.8416) * Math.sqrt((2 * rate * (1 - rate)) / nPerArm)) / rate;
+}
+
 export type RateComparison = { rateA: number; rateB: number; lift: number | null; z: number; p: number };
 
 /** Two-sided two-proportion z-test (pooled). lift is the relative change of B against A (null when A is 0). */

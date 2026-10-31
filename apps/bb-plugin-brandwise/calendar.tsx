@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { EntryEmailPreview } from "./email-page";
 
 export const CHANNELS = ["instagram", "facebook", "linkedin", "tiktok", "email", "web"];
 
@@ -507,6 +508,7 @@ function EntryDialog({
                 {entry.status === "approved" ? `Attempt ${entry.attempts} failed, retrying: ` : entry.status === "failed" ? `Failed after ${entry.attempts} attempts: ` : ""}{entry.error}
               </p>
             ) : null}
+            {entry.channel === "email" ? <EntryEmailPreview key={`${entry.id}:${entry.body.length}`} entryId={entry.id} /> : null}
             {entry.status === "published" && entry.externalUrl ? (
               <p className="text-sm"><a className="underline" href={entry.externalUrl} target="_blank" rel="noreferrer">Published post</a></p>
             ) : null}

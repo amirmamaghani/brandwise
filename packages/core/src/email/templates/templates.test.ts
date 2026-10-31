@@ -115,10 +115,10 @@ test("mjml engine: the seed compiles to responsive HTML and passes lint for a pr
   const templates = createTemplates({ root: () => root, renderer: () => mjmlProcess(engine), preview: () => chromePreview({ enginePath: engine, videoEnginePath: videoEngine }), assets: noImages, dialectOf: (p) => (p === "resend" ? resend.dialect! : null) });
   const campaign = "11111111-1111-4111-8111-111111111111";
   assert.deepEqual(templates.list(), []);
-  const d = templates.seed(campaign, "launch");
+  const d = await templates.seed(campaign, "launch");
   assert.ok(existsSync(join(d, "template.mjml")));
-  assert.throws(() => templates.seed(campaign, "launch"), /already exists/);
-  assert.throws(() => templates.seed("../x", "launch"), /invalid/);
+  await assert.rejects(templates.seed(campaign, "launch"), /already exists/);
+  await assert.rejects(templates.seed("../x", "launch"), /invalid/);
   assert.deepEqual(templates.list(), [{ campaignId: campaign, id: "launch" }]);
   const before = templates.state(campaign, "launch").hash;
   const r = await templates.render(campaign, "launch");
@@ -142,7 +142,7 @@ test("chrome preview: a picture of the e-mail", { skip: !haveMjml || !existsSync
   const root = mkdtempSync(join(tmpdir(), "bw-tpl-"));
   const templates = createTemplates({ root: () => root, renderer: () => mjmlProcess(engine), preview: () => chromePreview({ enginePath: engine, videoEnginePath: videoEngine }), assets: noImages, dialectOf: () => null });
   const campaign = "22222222-2222-4222-8222-222222222222";
-  templates.seed(campaign, "pic");
+  await templates.seed(campaign, "pic");
   const { png } = await templates.picture(campaign, "pic", { width: 640 });
   assert.deepEqual([...png.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], "a PNG");
   assert.ok(png.length > 8_000);
@@ -169,4 +169,40 @@ test("every provider with templates has a dialect of the same shape", () => {
     assert.ok(d.token("first_name", "there").includes("first_name"), p.id);
     assert.ok(d.token("first_name").includes("first_name") && !d.token("first_name").includes("|"), `${p.id}: no fallback, no separator`);
   }
+});
+
+test("contrast: WCAG ratios and the lint rule that uses them", async () => {
+  const { contrast } = await import("./domain/color.ts");
+  assert.ok(Math.abs(contrast("#000000", "#ffffff")! - 21) < 0.01);
+  assert.equal(contrast("#fff", "#ffffff"), 1);
+  assert.equal(contrast("red", "#ffffff"), null, "only hex colours are judged");
+  const deps = { renderer: passThrough, assets: noImages };
+  const orange = await renderTemplate({ ...seed, brand: { ...SEED_BRAND, colors: { ...SEED_BRAND.colors, primary: "#e8590c" } } }, SEED_SAMPLE, deps, { id: PREVIEW, dialect: null });
+  assert.ok(orange.findings.some((f) => f.rule === "contrast" && f.message.includes("white button text")), "a light orange button with white text is flagged");
+  assert.ok(!(await renderTemplate(seed, SEED_SAMPLE, deps, { id: PREVIEW, dialect: null })).findings.some((f) => f.rule === "contrast"));
+});
+
+test("link check: extracts clickable links, reports dead ones, never calls private addresses", async () => {
+  const { extractLinks, checkLinks } = await import("./domain/links.ts");
+  const { fetchLinkChecker, isPrivateAddress } = await import("./adapters/fetch-link-checker.ts");
+  const html = '<a href="https://a.example/x?p=1&amp;q=2">a</a><a href="https://a.example/x?p=1&amp;q=2">dup</a><a href="mailto:x@y.z">m</a><a href="#top">t</a><a href="{{{RESEND_UNSUBSCRIBE_URL}}}">u</a><a href="https://b.example/gone">b</a>';
+  assert.deepEqual(extractLinks(html), ["https://a.example/x?p=1&q=2", "https://b.example/gone"]);
+  for (const ip of ["127.0.0.1", "10.1.2.3", "192.168.0.9", "172.20.0.1", "169.254.169.254", "::1", "fd12::1", "::ffff:10.0.0.1"]) assert.ok(isPrivateAddress(ip), ip);
+  for (const ip of ["8.8.8.8", "172.32.0.1", "2606:4700::1"]) assert.ok(!isPrivateAddress(ip), ip);
+  const called: string[] = [];
+  const checker = fetchLinkChecker({
+    lookup: async (host) => [{ address: host === "internal.example" ? "10.0.0.5" : "93.184.216.34" }],
+    fetchImpl: (async (url: string, init: { method: string }) => {
+      called.push(`${init.method} ${url}`);
+      if (url.includes("gone")) return new Response("", { status: 404 });
+      if (init.method === "HEAD") return new Response("", { status: 405 });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+  const found = await checkLinks(html, checker);
+  assert.deepEqual(found.map((x) => [x.severity, x.message.includes("404")]), [["error", true]], "the dead link is an error, the live one (HEAD refused, GET fine) is fine");
+  assert.ok(called.includes("GET https://a.example/x?p=1&q=2"));
+  assert.match((await checker.check("https://internal.example/x")).error!, /private/);
+  assert.match((await checker.check("http://a.example/")).error!, /not https/);
+  assert.ok(!called.some((c) => c.includes("internal.example")), "a private address is never called");
 });

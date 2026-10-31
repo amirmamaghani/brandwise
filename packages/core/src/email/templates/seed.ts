@@ -2,7 +2,7 @@
 // hero image and a compliant footer. Kept as strings (not files) so it survives bundling into the plugin.
 import type { Brand, TemplateConfig } from "./domain/types.ts";
 
-export const SEED_MJML = `<mjml>
+export const SEED_MJML = `<mjml lang="{{locale}}">
   <mj-head>
     <mj-title>{{subject}}</mj-title>
     <mj-preview>{{preheader}}</mj-preview>

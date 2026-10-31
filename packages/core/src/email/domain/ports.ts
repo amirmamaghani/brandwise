@@ -48,7 +48,7 @@ export interface EmailStore {
   resolveSend(provider: string, ref: EventRef): Promise<string | null>;
   /** Stores events (send id may be null: linked later); returns how many were new. */
   insertEvents(rows: { event: EmailEvent; sendId: string | null }[]): Promise<number>;
-  recordSend(input: { entryId: string; provider: string; externalId: string; capabilities: Capabilities }): Promise<SendRecord>;
+  recordSend(input: { entryId: string; provider: string; externalId: string; capabilities: Capabilities; /** The render snapshot that was sent, when the e-mail came from a template. */ renderId?: string | null }): Promise<SendRecord>;
   sendForEntry(entryId: string): Promise<SendRecord | null>;
   sends(filter: { entryId?: string; campaignId?: string }): Promise<SendRecord[]>;
   /** Events of the given sends; with `asOf` only those that had happened by then (a report as of a point in time). */

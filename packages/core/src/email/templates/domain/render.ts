@@ -19,6 +19,7 @@ export async function renderTemplate(
   content: Record<string, unknown>,
   deps: { renderer: Renderer; assets: AssetHost },
   target: Target,
+  locale = "en",
 ): Promise<Rendered> {
   const preview = target.id === PREVIEW;
   const dialect = preview || !target.dialect ? previewDialect() : target.dialect;
@@ -26,7 +27,7 @@ export async function renderTemplate(
   const out: Finding[] = [...findings];
 
   // images: asset reference to the address the e-mail will use
-  const view: Record<string, unknown> = { ...value, brand: source.brand };
+  const view: Record<string, unknown> = { ...value, brand: source.brand, locale };
   for (const [key, def] of Object.entries(source.config.slots)) {
     if (def.type !== "image" || !value[key]) continue;
     const img = value[key] as ImageValue;
@@ -39,7 +40,7 @@ export async function renderTemplate(
     }
   }
 
-  const mjml = Mustache.render(source.mjml, view, undefined, MUSTACHE as never);
+  const mjml = Mustache.render(source.mjml, view, source.partials, MUSTACHE as never);
   const compiled = await deps.renderer.compile(mjml);
   for (const e of compiled.errors) out.push({ rule: "mjml", severity: "warn", message: `line ${e.line}: ${e.message}` });
   if (compiled.html === "") out.push({ rule: "mjml", severity: "error", message: "the template did not compile" });
@@ -50,7 +51,7 @@ export async function renderTemplate(
   const text = htmlToText(html);
   out.push(...lint({ html, text, subject, preheader, mjml: source.mjml, config: source.config, brand: source.brand, target: target.id, dialect }));
 
-  const hash = createHash("sha256").update(JSON.stringify([source.mjml, source.config, source.brand, value, target.id])).digest("hex");
+  const hash = createHash("sha256").update(JSON.stringify([source.mjml, source.config, source.brand, source.partials ?? {}, value, target.id, locale])).digest("hex");
   return { html, text, subject, preheader, size: Buffer.byteLength(html), findings: out, target: target.id, hash };
 }
 
