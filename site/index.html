@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BrandWise: agents plan your marketing, you approve what goes out</title>
+<meta name="description" content="BrandWise is an open-source, agent-driven marketing system on bb: a content calendar with human approval, connectors for Telegram and e-mail, provider-neutral statistics, creatives and video.">
+<link rel="canonical" href="https://brandwise.sh/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:title" content="BrandWise">
+<meta property="og:description" content="Agents plan your marketing. You approve what goes out. Open source, on bb.">
+<meta property="og:url" content="https://brandwise.sh/">
+<meta property="og:image" content="https://brandwise.sh/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="/"><picture><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="" width="34"></picture>BrandWise</a>
+    <nav><a href="#how">How it works</a><a href="#inside">What is inside</a><a href="#start">Quick start</a><a href="https://github.com/amirmamaghani/brandwise">GitHub</a></nav>
+  </header>
+
+  <div class="hero">
+    <picture><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img class="mark" src="images/logo.svg" alt="BrandWise logo: a b and a w woven together"></picture>
+    <h1>Agents plan your marketing.<br>You approve what goes out.</h1>
+    <p class="lead">An open-source, agent-driven marketing system on <a href="https://getbb.app">bb</a>. Agents draft posts, e-mails and creatives. A calendar with human approval is the only way anything leaves.</p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/amirmamaghani/brandwise">View on GitHub</a>
+      <a class="btn" href="#start">Quick start</a>
+    </div>
+    <p class="status">Early and unfinished: it works end to end on one machine, expect rough edges. MIT licensed.</p>
+  </div>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">An idea becomes a draft, a draft becomes an approved calendar entry, a scheduler hands it to a connector, and the results come back as numbers the agent can learn from.</p>
+    <div class="diagram"><img src="images/flow.svg" alt="Flow: brief, agent drafts, calendar entry, human approval, scheduler, connector, platform, events, statistics, next round" width="1240" height="560"></div>
+  </section>
+
+  <section id="principles">
+    <h2>Principles</h2>
+    <div class="grid">
+      <div class="card"><h3>The calendar is the only way out</h3><p>Agents create and edit entries. They never publish and never approve. A scheduler fires approved entries when their time comes.</p></div>
+      <div class="card"><h3>Approval tiers</h3><p>Tier 1 passes automatically, tier 2 needs one click, tier 3 is a deliberate manual approval. When unsure, the higher tier wins.</p></div>
+      <div class="card"><h3>Agents get tools, not keys</h3><p>Agents use the <code>bb brandwise</code> CLI, also over MCP. API keys live in settings and are never shown to them.</p></div>
+      <div class="card"><h3>Swap providers freely</h3><p>Statistics hang on our own records, so replacing the e-mail provider does not break reports.</p></div>
+    </div>
+  </section>
+
+  <section id="inside">
+    <h2>What is inside</h2>
+    <table>
+      <tr><th>Area</th><th>What it does</th></tr>
+      <tr><td>Campaigns</td><td>An always-on base (brand or product) plus time-bound campaigns that inherit from it.</td></tr>
+      <tr><td>Calendar</td><td>Month and week views, approval queue, change requests, retries and failure reasons.</td></tr>
+      <tr><td>Creatives</td><td>Library of images and videos in S3, thumbnails, AI provenance, upload and CRUD.</td></tr>
+      <tr><td>Publishing</td><td>Connectors for Telegram and e-mail (Resend); channels without a connector wait as "Publish by hand".</td></tr>
+      <tr><td>E-mail</td><td>Provider-neutral events, counts and a metric catalog: opens, clicks, bounces, rates.</td></tr>
+      <tr><td>Generation</td><td>Image and video generation with per-call and daily credit limits.</td></tr>
+      <tr><td>Video (optional)</td><td>Remotion projects per campaign, Remotion Studio next to an agent chat.</td></tr>
+      <tr><td>Agents</td><td>"Start agent" in the side panel of every page; it knows which page and project you are on.</td></tr>
+    </table>
+  </section>
+
+  <section id="architecture">
+    <h2>Architecture</h2>
+    <p class="sub">A bb plugin over a small core on Postgres and S3. Connectors and providers are modules you can add without touching the rest.</p>
+    <div class="diagram"><img src="images/architecture.svg" alt="Architecture: people and agents, a dedicated bb instance with the BrandWise plugin, scheduler and core, publishing connectors and providers" width="1240" height="722"></div>
+  </section>
+
+  <section id="start">
+    <h2>Quick start</h2>
+    <p class="sub">Requires Node 24, Docker, <a href="https://getbb.app">bb</a> 0.48 or newer and <code>rsync</code>.</p>
+<pre>git clone https://github.com/amirmamaghani/brandwise.git
+cd brandwise
+cp .env.example .env
+npm run infra:up                 # Postgres and an S3 emulator
+infra/bb-instance/provision.sh up
+
+export BB_SERVER_URL=http://127.0.0.1:38896 BB_HOST_DAEMON_PORT=38897
+bb brandwise campaign list       # "Main brand" is created on first start</pre>
+    <p class="sub" style="margin-top:18px">Telegram and e-mail switch on when their credentials are in <code>.env</code>. Details are in the <a href="https://github.com/amirmamaghani/brandwise#quick-start-local">README</a> and <a href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">CONTRIBUTING</a>.</p>
+  </section>
+
+  <section id="licences">
+    <h2>Licences and responsible use</h2>
+    <p class="sub" style="margin-bottom:0">BrandWise is MIT licensed. Remotion, used by the optional video engine, has its own licence: free for individuals and companies up to three people. Marketing e-mail needs recipient consent and a working unsubscribe, and AI-written claims in regulated areas such as finance or health must be reviewed by a human.</p>
+  </section>
+
+  <footer>
+    <div class="row">
+      <span>&copy; 2026 Amir Mamaghani. MIT licence.</span>
+      <span><a href="https://github.com/amirmamaghani/brandwise">GitHub</a> &middot; <a href="https://github.com/amirmamaghani/brandwise/blob/main/SECURITY.md">Security</a> &middot; <a href="https://github.com/amirmamaghani/brandwise/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></span>
+    </div>
+  </footer>
+</div>
+</body>
+</html>
