@@ -15,8 +15,8 @@ jobs:
     environment: { name: github-pages, url: "${{ steps.deployment.outputs.page_url }}" }
     steps:
       - uses: actions/checkout@v4
-      - name: Add the diagrams and logos from docs/images
-        run: mkdir -p site/images && cp docs/images/*.svg site/images/
+      - name: Add the logos from docs/images
+        run: mkdir -p site/images && cp docs/images/logo.svg docs/images/logo-dark.svg site/images/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
