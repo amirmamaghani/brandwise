@@ -8,6 +8,7 @@ import { ingest } from "./domain/ingest.ts";
 import { commonCapabilities, computeMetrics } from "./domain/metrics.ts";
 import type { EmailProvider } from "./domain/ports.ts";
 import type { Recipient } from "./domain/types.ts";
+import { simProvider } from "./adapters/sim.ts";
 import { emailConnector } from "./connector.ts";
 import { pgEmailStore } from "./store.ts";
 
@@ -17,10 +18,11 @@ export const recipientHasher = (salt: string) => (address: string): Recipient =>
   return { hash: createHash("sha256").update(`${salt}:${a}`).digest("hex"), domain: a.split("@")[1] ?? "" };
 };
 
-export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omit<ProviderConfig, "recipient">; extraProviders?: EmailProvider[] }) {
+export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omit<ProviderConfig, "recipient">; extraProviders?: EmailProvider[]; /** Switches the simulated provider on (development): `now` is the development clock. */ sim?: { now: () => Promise<Date> } }) {
   const recipient = recipientHasher(deps.salt);
-  const providers = [...providersFrom({ ...deps.providers, recipient }), ...(deps.extraProviders ?? [])];
+  const providers = [...providersFrom({ ...deps.providers, recipient }), ...(deps.sim ? [simProvider({ recipient, now: deps.sim.now })] : []), ...(deps.extraProviders ?? [])];
   const store = pgEmailStore(deps.pool);
+  for (const p of providers) p.attachSink?.((events) => ingest(events, store));
   const provider = (id: string) => {
     const p = providers.find((x) => x.id === id);
     if (!p?.events) throw new Error(`No e-mail provider "${id}" with events (configured: ${providers.map((x) => x.id).join(", ") || "none"})`);
@@ -36,9 +38,9 @@ export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omi
     /** Replay a saved payload (trusted: no signature check). */
     replay: async (providerId: string, body: string, eventId: string) => ingest(provider(providerId).parsePayload(body, eventId), store),
     /** Metrics for one calendar entry or a whole campaign, over every provider that sent them. */
-    async stats(filter: { entryId?: string; campaignId?: string }) {
+    async stats(filter: { entryId?: string; campaignId?: string; /** ISO: count only what had happened by then */ asOf?: string }) {
       const sends = await store.sends(filter);
-      const counts = eventsToCounts(await store.eventsFor(sends.map((s) => s.id)));
+      const counts = eventsToCounts(await store.eventsFor(sends.map((s) => s.id), { asOf: filter.asOf }));
       return { sends, counts, metrics: computeMetrics(counts, commonCapabilities(sends.map((s) => s.capabilities))) };
     },
   };

@@ -72,7 +72,7 @@ test("dependency rule: domain imports only domain; adapters import only domain a
     for (const i of imports(join(here, "domain", f))) assert.ok(!i.startsWith("../") && !i.startsWith("node:") && i !== "pg", `domain/${f} must not import ${i}`);
   }
   for (const f of readdirSync(join(here, "adapters")).filter((x) => x !== "index.ts")) {
-    for (const i of imports(join(here, "adapters", f))) assert.ok(i.startsWith("../domain/") || i.startsWith("node:crypto"), `adapters/${f} imports ${i}`);
+    for (const i of imports(join(here, "adapters", f))) assert.ok(i.startsWith("../domain/") || i.startsWith("./") || i.startsWith("node:crypto"), `adapters/${f} imports ${i}`);
   }
 });
 

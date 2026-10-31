@@ -33,9 +33,9 @@ export const connectorsFrom = (cfg: ConnectorConfig = {}): Connector[] => [
 export type Outcome = { id: string; title: string; channel: string; result: "published" | "retry" | "failed" | "needs_manual"; detail: string };
 
 /** Claim due entries and publish each through its connector. Returns what happened; nothing due returns an empty list. */
-export async function runDue(core: Core, connectors: Connector[] = connectorsFrom(), limit = 10): Promise<Outcome[]> {
+export async function runDue(core: Core, connectors: Connector[] = connectorsFrom(), limit = 10, campaignIds?: string[]): Promise<Outcome[]> {
   const out: Outcome[] = [];
-  for (const entry of await core.publishing.claimDue(limit)) {
+  for (const entry of await core.publishing.claimDue(limit, campaignIds)) {
     const base = { id: entry.id, title: entry.title, channel: entry.channel };
     const connector = connectors.find((c) => c.channels.includes(entry.channel));
     if (!connector) {

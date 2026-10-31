@@ -234,6 +234,9 @@ export function createCore(cfg: CoreConfig) {
     },
   };
 
+  /** The scheduler's clock: the database time plus the development offset (0 in production), so a simulated world runs on one time. */
+  const NOW = "(now() + coalesce((select offset_seconds from sim_clock where id = 1), 0) * interval '1 second')";
+
   /** What `publish.ts` drives: claim due entries, record the outcome. Bypasses assertActionable on purpose: due entries are frozen for people. */
   const publishing = {
     MAX_ATTEMPTS: 3,
@@ -242,16 +245,17 @@ export function createCore(cfg: CoreConfig) {
      * and count the attempt. Entries stuck in `publishing` for over 10 minutes (a run that died) are taken again; the
      * connector's idempotency key makes that safe. SKIP LOCKED: two runs never get the same entry.
      */
-    async claimDue(limit = 10): Promise<CalendarEntry[]> {
+    async claimDue(limit = 10, campaignIds?: string[]): Promise<CalendarEntry[]> {
       const ids = await q(
         `update content_calendar set status = 'publishing', attempts = attempts + 1, claimed_at = now(), error = null
          where id in (
            select id from content_calendar
-           where (status = 'approved' and scheduled_at <= now() and coalesce(next_attempt_at, scheduled_at) <= now())
-              or (status = 'publishing' and claimed_at < now() - interval '10 minutes')
+           where ((status = 'approved' and scheduled_at <= ${NOW} and coalesce(next_attempt_at, scheduled_at) <= ${NOW})
+              or (status = 'publishing' and claimed_at < now() - interval '10 minutes'))
+             and ($2::uuid[] is null or campaign_id = any($2::uuid[]))
            order by scheduled_at limit $1 for update skip locked)
          returning id`,
-        [limit],
+        [limit, campaignIds ?? null],
       );
       return (await Promise.all(ids.map((r: any) => calendar.get(r.id)))).filter((e): e is CalendarEntry => e !== null);
     },
@@ -263,7 +267,7 @@ export function createCore(cfg: CoreConfig) {
       const row = (await q(
         `update content_calendar set error = $2,
            status = case when attempts >= $3 then 'failed' else 'approved' end,
-           next_attempt_at = case when attempts >= $3 then null else now() + (power(2, attempts) * interval '1 minute') end
+           next_attempt_at = case when attempts >= $3 then null else ${NOW} + (power(2, attempts) * interval '1 minute') end
          where id = $1 returning status`,
         [id, error.slice(0, 500), publishing.MAX_ATTEMPTS],
       ))[0];

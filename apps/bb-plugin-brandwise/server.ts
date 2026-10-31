@@ -16,6 +16,9 @@ import { createVideo, videoContract } from "./video.ts";
 import { sleep, slug } from "./util.ts";
 import { connectorsFrom, runDue } from "./core/publish.ts";
 import { createEmail } from "./core/email/index.ts";
+import { createRegulator } from "./core/regulator/index.ts";
+import { regulatorStore } from "./core/regulator/store.ts";
+import { createEditorCli } from "./editor.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
 
@@ -209,6 +212,9 @@ export default async function plugin(bb: BbPluginApi) {
         default: allowedModes().includes("full") ? "full" : allowedModes()[0],
       },
     }),
+    section("dev", "Development", "For trying the control loop without sending anything.", {
+      simEnabled: { type: "boolean", label: "Simulated e-mail provider", description: "Adds a provider \"sim\" that answers with simulated opens, clicks and complaints, on a development clock (bb brandwise sim advance 24h). Never sends e-mail.", default: false },
+    }),
     section("tools", "Tools", "Command-line tools the providers run on this host, outside the agents' sandbox, so only the operator sets them. Account, workspace and limits are set per scope under Providers.", {
       higgsfieldBin: { type: "string", label: "Higgsfield CLI", description: "Name or path of the higgsfield binary.", default: "higgsfield" },
     }),
@@ -276,7 +282,13 @@ export default async function plugin(bb: BbPluginApi) {
   };
   // E-mail: providers with credentials, events in, statistics out (core/email). The salt makes the stored recipient hashes ours alone.
   const emailSalt = (await bb.storage.kv.get<string>("email_salt")) ?? (await (async () => { const s = randomUUID(); await bb.storage.kv.set("email_salt", s); return s; })());
-  const email = core === null ? null : createEmail({ pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined } });
+  const email = core === null ? null : createEmail({
+    pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
+    sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
+  });
+  // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
+  const regulator = core !== null && email !== null ? createRegulator({ core, email }) : null;
+  const editorCli = createEditorCli({ core: need, regulator: () => regulator });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
   const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
   for (const p of email?.providers ?? []) {
@@ -709,6 +721,12 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise calendar request-changes <id> <note>",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
+    "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
+    "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on e-mail; the rails judge, nobody can overrule)",
+    "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
+    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | complete <id> [--result '<json>']",
+    "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
+    "  bb brandwise sim status | advance <90m|24h|2d> | reset   (development clock for the simulated provider)",
     "  bb brandwise email stats <entry-id> | --campaign <c>   (opens, clicks, bounces... of sent e-mail campaigns, the same for every provider)",
     "  bb brandwise email ingest --provider <id> --file <payload.json>   (replay a saved webhook payload)",
     "  bb brandwise calendar run-due [--limit N]   (publish approved entries whose time has come; run every minute by a bb automation, prints nothing when nothing is due)",
@@ -737,7 +755,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -908,6 +926,8 @@ export default async function plugin(bb: BbPluginApi) {
     name: "brandwise",
     summary: "Campaigns, content calendar and assets of the BrandWise",
     commands: [
+      { name: "editor", summary: "The editor-in-chief regulator: signals, experiments, journal, tasks", usage: "bb brandwise editor signals|experiments|journal|tasks|goals ..." },
+      { name: "sim", summary: "Development clock for the simulated e-mail provider", usage: "bb brandwise sim status|advance|reset" },
       { name: "email", summary: "E-mail campaign statistics and event replay", usage: "bb brandwise email stats|ingest ..." },
       { name: "campaign", summary: "List or add campaigns (an always-on base or a time-bound campaign)", usage: "bb brandwise campaign list|add|channel|assign|unassign ..." },
       { name: "calendar", summary: "List, add, edit, send back, approve, withdraw approval of or cancel calendar entries", usage: "bb brandwise calendar list|add|edit|request-changes|unapprove|approve|cancel|run-due ..." },
@@ -1202,6 +1222,8 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "product") return productCli(c, action, args, { val, positional, reply, usage });
         if (area === "video") return video.cli(action, args, { val, positional, reply, usage });
+        if (area === "editor") return editorCli.editor(action, args, { val, positional, reply, usage });
+        if (area === "sim") return editorCli.sim(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "rename") {
           const [id, ...nameParts] = positional(args.slice(2));
           if (!id || nameParts.length === 0) return { exitCode: 1, stderr: usage };

@@ -1,0 +1,124 @@
+// CLI of the editor-in-chief regulator and of the development clock: `bb brandwise editor ...` and `bb brandwise sim ...`.
+// The regulator itself (rails, signals, experiments) lives in packages/core/src/regulator; this file only parses arguments and prints.
+import type { Core } from "./core/index.ts";
+import type { Regulator } from "./core/regulator/index.ts";
+import type { Signals } from "./core/regulator/signals.ts";
+
+type Io = { val: (argv: string[], name: string) => string | undefined; positional: (argv: string[]) => string[]; reply: (value: unknown, text: string) => { exitCode: number; stdout: string }; usage: string };
+
+const pct = (v: number | null, digits = 1) => (v === null ? "n/a" : `${(100 * v).toFixed(digits)} %`);
+const DURATION = /^(\d+(?:\.\d+)?)(m|h|d)$/;
+/** "90m", "24h", "2d" to milliseconds. */
+export const parseDuration = (s: string): number => {
+  const m = DURATION.exec(s);
+  if (!m) throw new Error(`Give a duration like 90m, 24h or 2d (got "${s}")`);
+  return Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"];
+};
+
+export function fmtSignals(s: Signals): string {
+  const lines = [`As of ${s.asOf}${s.frozen.frozen ? `   FROZEN: ${s.frozen.reason}` : ""}`];
+  lines.push(s.incumbent ? `Incumbent: ${s.incumbent.title} (entry ${s.incumbent.entryId})` : "Incumbent: none yet");
+  lines.push("", "Goals (smoothed over the last matured sends):");
+  for (const g of s.goals) lines.push(`  ${g.metric.padEnd(17)} ${g.kind === "target" ? "target >=" : "limit  <="} ${pct(g.value)}   now ${pct(g.current)} (n=${g.sample})   ${g.ok === null ? "no data" : g.ok ? "OK" : `gap ${pct(g.gap)}`}`);
+  if (s.goals.length === 0) lines.push("  none set: ask a person to set goals (editor goals set ...)");
+  lines.push("", "Recent sends (newest first):");
+  for (const r of s.recent) lines.push(`  ${r.entryId}  ${r.mature ? "mature " : `matures ${r.maturesAt?.slice(0, 16) ?? "?"}`}  delivered ${String(r.delivered).padStart(5)}  click ${pct(r.clickRate)} [${r.clickRateCi ? `${pct(r.clickRateCi[0])}..${pct(r.clickRateCi[1])}` : "n/a"}]  complaints ${pct(r.complaintRate, 2)}  "${r.title}"${r.guard ? `   GUARD: ${r.guard}` : ""}`);
+  if (s.recent.length === 0) lines.push("  nothing sent yet");
+  lines.push("", "Experiments:");
+  for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
+  for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
+  if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
+  const p = s.allowed.proposeExperiment;
+  lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
+  for (const n of s.notes) lines.push(`Note: ${n}`);
+  return lines.join("\n");
+}
+
+export function createEditorCli(deps: { core: () => Core; regulator: () => Regulator | null }) {
+  /** The regulator works on the always-on base: a campaign (or a child of it) given on the command line resolves to its base. */
+  async function base(args: string[], io: Io) {
+    const c = await deps.core().campaigns.resolve(io.val(args, "--campaign"));
+    return deps.core().campaigns.list().then((all) => all.find((x) => x.id === c.rootId) ?? c);
+  }
+
+  async function editor(action: string | undefined, args: string[], io: Io) {
+    const reg = deps.regulator();
+    if (!reg) return { exitCode: 1, stderr: "The regulator needs the database and the e-mail module: run infra/bb-instance/provision.sh apply" };
+    const { val, positional, reply, usage } = io;
+    const rest = positional(args.slice(2));
+    const who = val(args, "--as") ?? "agent";
+    const bad = { exitCode: 1, stderr: usage };
+    const b = await base(args, io);
+    const asOf = val(args, "--as-of");
+
+    if (action === "signals") { const s = await reg.signals(b.id, asOf); return reply(s, fmtSignals(s)); }
+    if (action === "goals") {
+      if (rest[0] === "set") { // a person's command: goals are the setpoint, the agent does not move them
+        const [, metric, value] = rest;
+        const kind = val(args, "--kind");
+        if (!metric || value === undefined || (kind !== "target" && kind !== "limit")) return bad;
+        await reg.goals.set(b.id, metric, kind, Number(value));
+      }
+      const goals = await reg.goals.list(b.id);
+      return reply(goals, goals.map((g) => `${g.metric}  ${g.kind}  ${pct(g.value)}`).join("\n") || "No goals set.");
+    }
+    if (action === "unfreeze") { await reg.unfreeze(b.id); return reply({ ok: true }, `${b.name}: unfrozen (a person's command)`); }
+    if (action === "experiments") {
+      const sub = rest[0];
+      if (sub === "propose") {
+        const [armA, armB, hypothesis] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis")];
+        if (!armA || !armB || !hypothesis) return bad;
+        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, createdBy: who });
+        return reply(e, `Experiment ${e.id} started: A ${e.armA} (control) against B ${e.armB} (challenger). The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}`);
+      }
+      if (sub === "evaluate") {
+        if (!rest[1]) return bad;
+        const r = await reg.experiments.evaluate(rest[1], asOf);
+        return reply(r, r.verdict === "wait" ? `Not ready: ${r.reasons.join("; ")}${r.readyAt ? ` (look again after ${r.readyAt.slice(0, 16)})` : ""}` : `Verdict ${r.verdict}${r.final ? " (final)" : ""}: ${r.reasons.join(" ") || "recorded earlier"}`);
+      }
+      const list = await reg.experiments.list(b.id, val(args, "--status"));
+      return reply(list, list.map((e) => `${e.id}  ${e.status}${e.verdict ? " -> " + e.verdict : ""}  A ${e.armA}  B ${e.armB}  "${e.hypothesis}"`).join("\n") || "No experiments.");
+    }
+    if (action === "journal") {
+      if (rest[0] === "write") {
+        const text = rest.slice(1).join(" ");
+        if (!text) return bad;
+        await reg.journal.write(b.id, who, text, val(args, "--kind") === "note" ? "note" : "run");
+        return reply({ ok: true }, "Written to the journal.");
+      }
+      const rows = await reg.journal.read(b.id, Number(val(args, "--limit") ?? 12) || 12, val(args, "--kind"));
+      return reply(rows, rows.map((r) => `${r.at.slice(0, 16)}  [${r.kind}] ${r.author}: ${r.body}`).join("\n") || "The journal is empty.");
+    }
+    if (action === "tasks") {
+      const sub = rest[0];
+      if (sub === "create") {
+        const kind = val(args, "--kind"), brief = val(args, "--brief");
+        if (!kind || !brief) return bad;
+        const params = val(args, "--params") ? JSON.parse(val(args, "--params")!) : {};
+        const t = await reg.tasks.create(b.id, who, { kind, brief, params });
+        return reply(t, `Task ${t.id} created (${t.kind}). An author agent will claim it.`);
+      }
+      if (sub === "claim") { if (!rest[1]) return bad; const t = await reg.tasks.claim(rest[1], who); return reply(t, `Task ${t.id} is yours: ${t.brief}\nparams: ${JSON.stringify(t.params)}`); }
+      if (sub === "complete") { if (!rest[1]) return bad; const t = await reg.tasks.complete(rest[1], val(args, "--result") ? JSON.parse(val(args, "--result")!) : {}); return reply(t, `Task ${t.id} done.`); }
+      const list = await reg.tasks.list(b.id, val(args, "--status"));
+      return reply(list, list.map((t) => `${t.id}  ${t.status}${t.claimedBy ? " by " + t.claimedBy : ""}  ${t.kind}: ${t.brief}  ${JSON.stringify(t.params)}`).join("\n") || "No tasks.");
+    }
+    return bad;
+  }
+
+  /** The development clock: lets a simulated provider and the rails live days in minutes. Only affects reports and simulated sends. */
+  async function sim(action: string | undefined, args: string[], io: Io) {
+    const reg = deps.regulator();
+    if (!reg) return { exitCode: 1, stderr: "Not configured" };
+    const step = io.positional(args.slice(2))[0];
+    if (action === "advance") {
+      if (!step) return { exitCode: 1, stderr: io.usage };
+      const now = await reg.clock.advance(parseDuration(step));
+      return io.reply({ now: now.toISOString() }, `Simulated time is now ${now.toISOString()}`);
+    }
+    if (action === "reset") { await reg.clock.reset(); return io.reply({ ok: true }, "Development clock back to real time."); }
+    const now = await reg.clock.now();
+    return io.reply({ now: now.toISOString(), offsetSeconds: Math.round((now.getTime() - Date.now()) / 1000) }, `Simulated time ${now.toISOString()} (real time plus ${Math.round((now.getTime() - Date.now()) / 3_600_000)} h)`);
+  }
+  return { editor, sim };
+}

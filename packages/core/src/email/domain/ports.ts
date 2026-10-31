@@ -31,9 +31,11 @@ export type EmailProvider = {
   capabilities: Capabilities;
   sender?: EmailSender;
   events?: EmailEventSource;
+  /** For providers that produce events themselves (a simulation): receives the function that stores them. */
+  attachSink?(sink: (events: EmailEvent[]) => Promise<unknown>): void;
 };
 
-export type SendRecord = { id: string; entryId: string; provider: string; externalId: string; capabilities: Capabilities; createdAt: string };
+export type SendRecord = { id: string; entryId: string; provider: string; externalId: string; capabilities: Capabilities; createdAt: string; /** Time of the earliest `sent` event, null until one arrived. */ sentAt: string | null };
 /** The least an event needs to be counted. */
 export type CountableEvent = { sendId: string; type: EventType; recipientHash: string; detail: Detail };
 
@@ -45,5 +47,6 @@ export interface EmailStore {
   recordSend(input: { entryId: string; provider: string; externalId: string; capabilities: Capabilities }): Promise<SendRecord>;
   sendForEntry(entryId: string): Promise<SendRecord | null>;
   sends(filter: { entryId?: string; campaignId?: string }): Promise<SendRecord[]>;
-  eventsFor(sendIds: string[]): Promise<CountableEvent[]>;
+  /** Events of the given sends; with `asOf` only those that had happened by then (a report as of a point in time). */
+  eventsFor(sendIds: string[], opts?: { asOf?: string }): Promise<CountableEvent[]>;
 }

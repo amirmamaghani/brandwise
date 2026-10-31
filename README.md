@@ -7,14 +7,15 @@
 
 # BrandWise
 
-An open-source, agent-driven marketing system that runs on [bb](https://getbb.app). AI agents plan, write and prepare campaigns; **nothing leaves the system without passing the calendar and a human approval**.
+An open-source, agent-driven marketing system that runs on [bb](https://getbb.app). AI agents plan, write and prepare campaigns; **nothing leaves the system without passing the calendar and an approval**, given by a person or by an approver agent you have authorised.
 
-> **Status: early.** It works end to end on one machine (calendar, creatives, publishing to Telegram and e-mail via Resend, statistics, Remotion video), but expect rough edges and breaking changes. Not production-hardened.
+> **Status: early.** It works end to end on one machine (calendar, creatives, publishing to Telegram and e-mail via Resend, statistics, Remotion video), but expect rough edges and breaking changes. Not production-hardened. Today every approval above tier 1 is given by a person in the Calendar page; approver agents and their policies are part of the design and not built yet.
 
 ## The idea
 
-- **The calendar is the only way out.** Agents create and edit calendar entries. They never publish and never approve. A scheduler hands approved entries to connectors when their time comes.
-- **Approval tiers.** Tier 1 passes automatically, tier 2 needs one click, tier 3 is a deliberate manual approval. When unsure, the higher tier wins.
+- **The calendar is the only way out.** Agents create and edit calendar entries. They never publish directly: a scheduler hands approved entries to connectors when their time comes.
+- **Approval is a role, not a person.** Whoever writes an entry can never approve it (separation of duties). The approver is either a human or a dedicated approver agent with its own identity, working under a policy you set per campaign: which tiers it may approve, which checks must be green (claims lint, limits and budgets), and what it must escalate to a human. Every approval records who (or which agent) gave it and why.
+- **Approval tiers.** Tier 1 passes automatically, tier 2 needs one approval, tier 3 is a deliberate, accountable approval. A policy may delegate tiers to an approver agent; anything it is unsure about goes to the higher tier or to a human. By default every tier above 1 waits for a person.
 - **Agents get tools, not credentials.** Agents use the `bb brandwise` CLI (also reachable over MCP). API keys live in plugin settings and are never shown to them.
 - **Swap providers freely.** Statistics hang on our own records, not on a provider's ids, so replacing the e-mail provider does not break reports.
 
@@ -33,6 +34,7 @@ An open-source, agent-driven marketing system that runs on [bb](https://getbb.ap
 | E-mail | Provider-neutral domain: events, counts and a metric catalog (opens, clicks, bounces, rates), adapters, webhook ingest, `email stats` |
 | Generation | Higgsfield image and video generation with per-call and daily credit limits |
 | Video (optional) | Remotion projects per campaign, Remotion Studio embedded next to an agent chat, renders land in Creatives |
+| Editor (regulator) | An editor agent steers an e-mail campaign as a feedback loop: signals, A/B experiments judged by code (maturity, minimum sample, hysteresis, guards, cooldown), tasks for author agents, a journal. Testable in minutes on a simulated provider and clock, see [`docs/editor.md`](docs/editor.md) |
 | Agents | "Start agent" in the side panel of every page; the agent knows which page and project you are on |
 
 ## Architecture

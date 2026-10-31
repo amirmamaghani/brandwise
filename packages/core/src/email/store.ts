@@ -5,7 +5,8 @@ import type pg from "pg";
 import type { CountableEvent, EmailStore, SendRecord } from "./domain/ports.ts";
 import type { Capabilities } from "./domain/types.ts";
 
-const sendFrom = (r: any): SendRecord => ({ id: r.id, entryId: r.entry_id, provider: r.provider, externalId: r.external_id, capabilities: r.capabilities as Capabilities, createdAt: new Date(r.created_at).toISOString() });
+const sendFrom = (r: any): SendRecord => ({ id: r.id, entryId: r.entry_id, provider: r.provider, externalId: r.external_id, capabilities: r.capabilities as Capabilities, createdAt: new Date(r.created_at).toISOString(), sentAt: r.sent_at ? new Date(r.sent_at).toISOString() : null });
+const SENT_AT = "(select min(at) from email_event where send_id = s.id and type = 'sent') as sent_at";
 
 export function pgEmailStore(pool: pg.Pool): EmailStore {
   const q = async (sql: string, params: unknown[] = []) => (await pool.query(sql, params)).rows;
@@ -16,19 +17,28 @@ export function pgEmailStore(pool: pg.Pool): EmailStore {
       return null;
     },
     async insertEvents(rows) {
+      if (rows.length === 0) return 0;
+      // one statement per batch: a simulated send produces thousands of events
+      const payload = rows.map(({ event: e, sendId }) => ({
+        provider: e.provider, provider_event_id: e.providerEventId, send_id: sendId, ref_external_id: e.ref.externalId ?? null, type: e.type, at: e.at,
+        recipient_hash: e.recipient.hash, recipient_domain: e.recipient.domain, detail: e.detail, raw: e.raw ?? null, schema_version: e.schemaVersion,
+      }));
       let inserted = 0;
-      for (const { event: e, sendId } of rows) {
+      for (let i = 0; i < payload.length; i += 2000) {
         inserted += (await q(
           `insert into email_event (provider, provider_event_id, send_id, ref_external_id, type, at, recipient_hash, recipient_domain, detail, raw, schema_version)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (provider, provider_event_id) do nothing returning id`,
-          [e.provider, e.providerEventId, sendId, e.ref.externalId ?? null, e.type, e.at, e.recipient.hash, e.recipient.domain, e.detail, e.raw ?? null, e.schemaVersion],
+           select provider, provider_event_id, send_id, ref_external_id, type, at, recipient_hash, recipient_domain, detail, raw, schema_version
+           from jsonb_to_recordset($1::jsonb) as x(provider text, provider_event_id text, send_id uuid, ref_external_id text, type text, at timestamptz,
+             recipient_hash text, recipient_domain text, detail jsonb, raw jsonb, schema_version int)
+           on conflict (provider, provider_event_id) do nothing returning id`,
+          [JSON.stringify(payload.slice(i, i + 2000))],
         )).length;
       }
       return inserted;
     },
     async recordSend({ entryId, provider, externalId, capabilities }) {
       const row = (await q(
-        "insert into email_send (entry_id, provider, external_id, capabilities) values ($1,$2,$3,$4) returning *",
+        "insert into email_send (entry_id, provider, external_id, capabilities) values ($1,$2,$3,$4) returning *, null::timestamptz as sent_at",
         [entryId, provider, externalId, capabilities],
       ))[0];
       // events that arrived before we recorded the send (or for a campaign sent by hand) are linked now
@@ -36,19 +46,19 @@ export function pgEmailStore(pool: pg.Pool): EmailStore {
       return sendFrom(row);
     },
     async sendForEntry(entryId) {
-      const r = (await q("select * from email_send where entry_id = $1", [entryId]))[0];
+      const r = (await q(`select s.*, ${SENT_AT} from email_send s where s.entry_id = $1`, [entryId]))[0];
       return r ? sendFrom(r) : null;
     },
     async sends({ entryId, campaignId }) {
       return (await q(
-        `select s.* from email_send s join content_calendar c on c.id = s.entry_id
+        `select s.*, ${SENT_AT} from email_send s join content_calendar c on c.id = s.entry_id
          where ($1::text is null or s.entry_id = $1) and ($2::uuid is null or c.campaign_id = $2) order by s.created_at`,
         [entryId ?? null, campaignId ?? null],
       )).map(sendFrom);
     },
-    async eventsFor(sendIds) {
+    async eventsFor(sendIds, opts) {
       if (sendIds.length === 0) return [];
-      return (await q("select send_id, type, recipient_hash, detail from email_event where send_id = any($1::uuid[]) order by at", [sendIds]))
+      return (await q("select send_id, type, recipient_hash, detail from email_event where send_id = any($1::uuid[]) and ($2::timestamptz is null or at <= $2) order by at", [sendIds, opts?.asOf ?? null]))
         .map((r: any): CountableEvent => ({ sendId: r.send_id, type: r.type, recipientHash: r.recipient_hash, detail: r.detail }));
     },
   };
