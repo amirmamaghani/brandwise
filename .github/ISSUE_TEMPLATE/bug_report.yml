@@ -1,0 +1,18 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: What did you expect and what did you get? }
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes: { label: Steps to reproduce, description: Commands or clicks, in order. }
+    validations: { required: true }
+  - type: input
+    id: versions
+    attributes: { label: Versions, description: "bb version, Node version, OS, commit of BrandWise" }
+  - type: textarea
+    id: logs
+    attributes: { label: Output or logs, description: Remove secrets and personal data first., render: shell }

@@ -1,0 +1,21 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions: { contents: read }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Core tests (unit; database tests skip without DATABASE_URL)
+        working-directory: packages/core
+        run: npm install && npm test
+      - name: Plugin type check
+        working-directory: apps/bb-plugin-brandwise
+        run: |
+          mkdir -p core
+          rsync -a --delete --exclude='*.test.ts' --exclude='migrate.ts' --exclude='contract.ts' --exclude='testing.ts' ../../packages/core/src/ core/
+          npm install && npx tsc --noEmit

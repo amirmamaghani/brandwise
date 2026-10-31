@@ -1,0 +1,27 @@
+{
+  "name": "@brandwise/video-remotion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Remotion video engine for BrandWise. Remotion has its own licence (free for individuals and teams up to 3, otherwise a company licence): see README.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "bw-video": "render.mjs"
+  },
+  "scripts": {},
+  "dependencies": {
+    "@remotion/bundler": "4.0.539",
+    "@remotion/cli": "4.0.539",
+    "@remotion/google-fonts": "4.0.539",
+    "@remotion/renderer": "4.0.539",
+    "react": "^19",
+    "react-dom": "^19",
+    "remotion": "4.0.539",
+    "zod": "^4",
+    "@remotion/transitions": "4.0.539",
+    "@remotion/shapes": "4.0.539",
+    "@remotion/noise": "4.0.539",
+    "@remotion/layout-utils": "4.0.539",
+    "@remotion/motion-blur": "4.0.539"
+  }
+}

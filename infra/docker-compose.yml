@@ -1,0 +1,69 @@
+# Local dev services for marketing-ai: Postgres + a local S3 emulator (object storage).
+#
+#   pnpm infra:up      # start everything and wait until healthy
+#   pnpm infra:down    # stop everything (data persists in the volumes)
+#
+# Host ports are offset from the usual defaults (Postgres 5432) so they do not clash with other local stacks.
+# The emulator speaks the S3 API, so the app only needs S3_* env vars: see .env.example for the
+# switch between this local stack and production (Cloudflare R2 / AWS S3 / Backblaze B2).
+
+# Compose project name = repo name: every container/network/volume is grouped under it (see infra skill).
+name: marketing-ai
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: marketing-ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-marketing_ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marketing_ai}
+      POSTGRES_DB: ${POSTGRES_DB:-marketing_ai}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5436}:5432"
+    volumes:
+      - marketing-ai-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-marketing_ai} -d ${POSTGRES_DB:-marketing_ai}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Local S3 emulator (RustFS). The official MinIO images are no longer pullable from Docker Hub or
+  # quay.io (checked 2026-10-29), so dev uses a drop-in. Production uses R2/S3/B2: the app only sees S3_* env.
+  s3:
+    image: rustfs/rustfs:latest
+    container_name: marketing-ai-s3
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-marketing-ai}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-marketing-ai-secret}
+    ports:
+      - "127.0.0.1:${S3_API_PORT:-9010}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9011}:9001"
+    volumes:
+      - marketing-ai-s3-data:/data
+
+  # One-shot: waits for the S3 API, creates the private bucket, exits.
+  s3-init:
+    image: amazon/aws-cli:latest
+    container_name: marketing-ai-s3-init
+    depends_on:
+      - s3
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-marketing-ai}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-marketing-ai-secret}
+      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-marketing-ai-assets}
+    entrypoint: >
+      /bin/sh -c "for i in $$(seq 1 30); do
+      aws --endpoint-url http://s3:9000 s3api head-bucket --bucket $$S3_BUCKET 2>/dev/null && exit 0;
+      aws --endpoint-url http://s3:9000 s3api create-bucket --bucket $$S3_BUCKET 2>/dev/null && exit 0;
+      sleep 2; done; echo 'bucket not created' >&2; exit 1"
+
+volumes:
+  marketing-ai-postgres-data:
+    name: marketing-ai-postgres-data
+  marketing-ai-s3-data:
+    name: marketing-ai-s3-data

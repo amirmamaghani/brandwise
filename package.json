@@ -1,0 +1,25 @@
+{
+  "name": "brandwise",
+  "private": true,
+  "description": "Open-source, agent-driven marketing system on bb: calendar, approval, connectors, e-mail, creatives and video.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amirmamaghani/brandwise.git"
+  },
+  "homepage": "https://github.com/amirmamaghani/brandwise",
+  "packageManager": "pnpm@12.11.2",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "bootstrap": "tools/bootstrap.sh",
+    "dl": "tools/video-dl.sh",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d --wait",
+    "infra:down": "docker compose -f infra/docker-compose.yml down"
+  },
+  "devDependencies": {
+    "turbo": "^2"
+  }
+}
