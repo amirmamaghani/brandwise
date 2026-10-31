@@ -64,6 +64,8 @@ agents / MCP ──► bb brandwise CLI ──► plugin ──► packages/core
 
 ## Installation
 
+**One command:** `npx create-brandwise` installs bb if it is missing, clones BrandWise into `./brandwise`, installs the dependencies, starts the infrastructure and provisions the instance with the plugin (the manual steps below, done for you). Docker must be installed and running; the script tells you if not. `--dry-run` only prints what it would do.
+
 BrandWise runs on one machine (macOS or Linux): a dedicated bb instance, Postgres and an S3 emulator in Docker.
 
 **Requirements:** Node 24, pnpm, Docker, [bb](https://getbb.app) 0.48 or newer (the `bb` and `bb-app` commands on your `PATH`), `rsync`, `python3`. Homebrew is used to install `yt-dlp`, `ffmpeg` and `gallery-dl` when they are missing (or install them yourself).

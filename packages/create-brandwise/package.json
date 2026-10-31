@@ -1,0 +1,11 @@
+{
+  "name": "create-brandwise",
+  "version": "0.1.0",
+  "description": "One command that installs bb, BrandWise and its plugin: npx create-brandwise",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "create-brandwise": "./install.mjs" },
+  "files": ["install.mjs"],
+  "engines": { "node": ">=24" },
+  "repository": { "type": "git", "url": "git+https://github.com/amirmamaghani/brandwise.git", "directory": "packages/create-brandwise" }
+}
