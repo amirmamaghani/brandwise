@@ -11,6 +11,10 @@ An open-source, agent-driven marketing system that runs on [bb](https://getbb.ap
 - **Agents get tools, not credentials.** Agents use the `bb brandwise` CLI (also reachable over MCP). API keys live in plugin settings and are never shown to them.
 - **Swap providers freely.** Statistics hang on our own records, not on a provider's ids, so replacing the e-mail provider does not break reports.
 
+## How it works
+
+![How a post goes from idea to published and measured](docs/images/flow.svg)
+
 ## What is in the box
 
 | Area | What it does |
@@ -25,6 +29,10 @@ An open-source, agent-driven marketing system that runs on [bb](https://getbb.ap
 | Agents | "Start agent" in the side panel of every page; the agent knows which page and project you are on |
 
 ## Architecture
+
+![BrandWise architecture](docs/images/architecture.svg)
+
+In short:
 
 ```
 agents / MCP ──► bb brandwise CLI ──► plugin ──► packages/core ──► Postgres + S3
@@ -67,6 +75,9 @@ Details for operating the instance: [`.claude/skills/bb-instance/SKILL.md`](.cla
 
 - **New channel:** a connector is one small module with `publish(entry)`; see `packages/core/src/publish.ts` and `connector-telegram.ts`.
 - **New e-mail provider:** one adapter file that implements the sender and event-source ports, and passes the shared contract tests. See [`docs/email.md`](docs/email.md).
+
+![E-mail module: sending, events and statistics](docs/images/email.svg)
+
 - **New generation provider:** `packages/core/src/providers`.
 
 ## Licences and responsible use

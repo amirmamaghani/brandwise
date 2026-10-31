@@ -2,6 +2,14 @@
 
 Summary of the layers from the BrandWise brief + the calendar as the only path to execution. What is still missing and in what order: `roadmap.md`. Product details are in the brief (outside the repo).
 
+## 0. At a glance
+
+![BrandWise architecture](images/architecture.svg)
+
+![How a post goes from idea to published and measured](images/flow.svg)
+
+The diagram below is the longer-term design (compiler, policy layer, research tools); the pictures above show what is built.
+
 ## 1. Layers
 
 ```mermaid

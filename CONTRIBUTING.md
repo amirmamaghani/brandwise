@@ -16,6 +16,10 @@ Thanks for helping. This is a young project: small, focused pull requests get re
 5. **Personal data stays out of what we store.** Recipient addresses and IPs are hashed or dropped before an event is saved.
 6. **Humans decide the audience.** An agent must not be able to choose who receives a message.
 
+## How it fits together
+
+See the diagrams in the [README](README.md#how-it-works). To change a diagram, edit the script in `tools/diagrams/` and run `tools/diagrams/build.sh`; do not edit the SVG files by hand.
+
 ## Development setup
 
 Requirements: Node 24, Docker, [bb](https://getbb.app) 0.48+, `rsync`.

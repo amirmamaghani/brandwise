@@ -2,6 +2,7 @@
 
 **Status: steps 1 to 3 are built** (domain, store, `email stats`, webhook, Resend adapter and the `memory` test provider), the code is in `packages/core/src/email/`. Verified by tests (17 pass, including an integration test with the database). **There has been no live run through Resend yet**; the key, domain, segment and public webhook address are missing. There is no second provider yet. Claims about the capabilities of specific providers are verified when writing that provider's adapter, not here.
 
+![E-mail module: sending, events and statistics](images/email.svg)
 ## 1. Metrics catalog
 
 Basic rule: **every metric has one definition in code** (numerator, denominator, window). "Open rate" is not a provider number but our function over events, so it can be compared across providers.
