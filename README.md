@@ -23,6 +23,12 @@ An open-source, agent-driven marketing system that runs on [bb](https://getbb.ap
 
 ![How a post goes from idea to published and measured](docs/images/flow.svg)
 
+## The feedback loop
+
+For e-mail campaigns an **editor agent** closes the loop: it reads the statistics, picks one hypothesis, and has author agents write a variant that goes out through the same calendar as everything else. **Code, not the agent, judges the result** (maturity, minimum sample, significance plus a minimum lift, cooldown, complaint and unsubscribe guards), and only a person sets the goals and clears a freeze. Details and recorded runs: [`docs/editor.md`](docs/editor.md).
+
+![The editor loop: goals, editor, authors, calendar, audience, events, signals, rails, journal](docs/images/regulator.svg)
+
 ## What is in the box
 
 | Area | What it does |

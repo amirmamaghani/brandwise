@@ -1,0 +1,31 @@
+import os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+OUT = os.path.join(HERE, "..", "..", "docs", "images")
+from svg import S
+s=S(1240,672,"The editor loop: a feedback regulator for e-mail")
+s.text(620,36,"The editor loop: a feedback regulator for e-mail",20,"700","middle","#1f2933")
+W,H,X=215,130,[30,275,520,765,1010]
+kw=dict(size=12.5,tsize=14.5)
+s.box(X[0],80,W,H,"1  Goals and limits",("Click rate: a target.","Complaints, unsubscribes:","limits. Set by a person,","never by an agent."),"human",**kw)
+s.box(X[1],80,W,H,"2  Editor agent",("The controller. Reads the","signals and the journal,","picks ONE hypothesis and","hands out the work."),"agent",**kw)
+s.box(X[2],80,W,H,"3  Author agents",("Write the variant: a subject","or one slot of a template.","They hand in only that;","the system builds the entry."),"agent",**kw)
+s.box(X[3],80,W,H,"4  Calendar and scheduler",("The same way out as every","e-mail: tier, approval,","run-due, connector.","Two arms, two audiences."),"code",**kw)
+s.box(X[4],80,200,H,"5  Audience",("Control (A) and challenger","(B) go to separate groups,","so nobody gets both and","the result has one cause."),"world",**kw)
+s.box(X[4],330,200,H,"6  Events",("Opens, clicks, bounces and","complaints come back from","the provider, signed and","deduplicated."),"code",**kw)
+s.box(X[3],330,W,H,"7  Statistics and signals",("Rates with intervals,","smoothed over matured sends.","Power: the smallest lift this","audience can show."),"store",**kw)
+s.box(X[2],330,W,H,"8  The rails (code)",("Judge the experiment. The","agent can ask, not overrule.","Verdict is final: A, B,","inconclusive or freeze."),"code",**kw)
+s.box(X[1],330,W,H,"9  Journal and state",("One entry per run, a learning","per conclusion, the incumbent.","The agent's only memory","between runs."),"store",**kw)
+s.box(X[0],330,W,H,"A person",("Sets goals and limits,","approves what needs it,","clears a freeze.","Nobody else can."),"human",**kw)
+for a,b in zip(X[:4],X[1:5]): s.arrow([(a+W,145),(b,145)])
+s.arrow([(1110,210),(1110,330)])
+for a,b in [(X[4],X[3]+W),(X[3],X[2]+W),(X[2],X[1]+W)]: s.arrow([(a,395),(b,395)])
+s.arrow([(382,330),(382,210)],"reads",365,275)
+s.arrow([(137,330),(137,210)],dashed=True)
+s.group(275,485,935,105,"What the rails enforce (packages/core/src/regulator/rails.ts)","code")
+cols=[("Maturity","judge only data","older than 24 h"),("Minimum sample","200 delivered","per arm"),("Hysteresis","p < 0.05 and a","lift of 10 % or more"),("Cooldown","24 h after","a change"),("One at a time","one experiment,","one variable"),("Guards","complaints, unsubscribes:","freeze")]
+for i,(t,a,b) in enumerate(cols):
+    cx=372+i*155; s.text(cx,536,t,13,"700","middle","#1f2933"); s.text(cx,555,a,11,"400","middle"); s.text(cx,570,b,11,"400","middle")
+s.text(620,620,"The agents steer; code decides. Nothing leaves without the calendar, and nobody but a person sets the goals.",13,"700","middle","#1f2933")
+s.legend(30,658,[("human","Human"),("agent","Agent (AI)"),("code","Code"),("store","Stored data"),("world","Outside world")])
+s.save(os.path.join(OUT, "regulator.svg"))

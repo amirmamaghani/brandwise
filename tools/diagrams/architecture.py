@@ -13,21 +13,21 @@ s.box(50,430,230,110,"Other MCP clients",("Any MCP client connected","to the ins
 # bb instance
 s.group(330,60,590,610,"Dedicated bb instance","code")
 s.group(350,90,550,205,"BrandWise plugin","code")
-for i,(t) in enumerate(["Calendar","Creatives","Campaigns","Video","Settings"]):
-    s.box(369+i*104,120,96,50,t,(),"code",tsize=13.5)
-s.box(369,188,250,90,"CLI and MCP: bb brandwise",("calendar, campaign, assets,","creative, video, email stats,","product, run-due"),"code",size=12.5)
-s.box(631,188,250,90,"Skills and agent prompts",("What an agent may do and","how: one skill for the CLI,","prompts per page and role"),"code",size=12.5)
+for i,(t) in enumerate(["Calendar","Creatives","Campaigns","E-mail","Video","Settings"]):
+    s.box(369+i*87,120,81,50,t,(),"code",tsize=13)
+s.box(369,188,250,90,"CLI and MCP: bb brandwise",("calendar, campaign, assets,","email, editor, templates,","video, product, run-due"),"code",size=12.5)
+s.box(631,188,250,90,"Skills and agent prompts",("One skill for the CLI, plus","editor and author roles;","prompts per page"),"code",size=12.5)
 s.box(350,310,550,62,"Scheduler: a bb automation, every minute",("runs calendar run-due, silent when nothing is due",),"code",size=12.5)
 s.group(350,388,550,150,"packages/core (no bb dependency)","store")
-for i,(t,l) in enumerate([("Campaigns",("base + children",)),("Calendar",("entries, tiers,","approval")),("Assets",("files, hashes,","provenance")),("Publishing",("claim, retry,","connectors")),("E-mail",("events, metrics,","adapters"))]):
-    s.box(367+i*104,420,96,102,t,l,"store",size=11.5,tsize=13.5)
+for i,(t,l) in enumerate([("Campaigns",("base + children",)),("Calendar",("entries, tiers,","approval")),("Assets",("files, hashes,","provenance")),("Publishing",("claim, retry,","connectors")),("E-mail",("events, metrics,","templates")),("Editor",("goals, signals,","A/B rails")) ]):
+    s.box(367+i*88,420,82,102,t,l,"store",size=11,tsize=13)
 s.box(350,556,260,58,"Postgres",("campaigns, calendar, events, settings",),"store",size=12)
 s.box(640,556,260,58,"S3 (any S3-compatible)",("creatives, thumbnails, video",),"store",size=12)
 s.text(620,646,"Local stack: Docker (Postgres + S3 emulator). Production: any managed Postgres and S3.",12,"400","middle")
 # right
 s.group(960,60,250,245,"Publishing connectors","code")
 s.box(978,92,214,58,"Telegram",("channel, group or user",),"code",size=12)
-s.box(978,160,214,80,"E-mail",("Resend today; other providers","plug in through one adapter","file and pass shared tests"),"code",size=12)
+s.box(978,160,214,80,"E-mail",("Resend today; a simulated","provider for tests; others","plug in through one adapter"),"code",size=12)
 s.box(978,250,214,42,"mock",("for trying the pipeline",),"code",size=11.5,tsize=13.5)
 s.box(960,332,250,92,"Outside world",("Telegram, mailboxes. Signed","webhooks come back as events","(verified, deduplicated)"),"world",size=12)
 s.group(960,455,250,190,"Providers (optional)","code")

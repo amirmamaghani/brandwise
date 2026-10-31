@@ -22,7 +22,7 @@ s.arrow([(xs[3]+w/2,y1),(xs[3]+w/2,y1-26),(xs[1]+w/2,y1-26),(xs[1]+w/2,y1-2)],"c
 y2=330
 s.box(xs[6],y2,w,h,"8  Events",("Signed webhooks","or polling, turned","into one event","format, deduplicated"),"code",size=12.5,tsize=14.5)
 s.box(xs[4]-w/2-gap/2+20,y2,w+40,h,"9  Statistics",("Counts and metrics:","clicks, bounces, opens,","unsubscribes. Same","for every provider"),"store",size=12.5,tsize=14.5)
-s.box(xs[1],y2,w+20,h,"10  Next round",("The agent reads","the numbers and","proposes the next","draft"),"agent",size=12.5,tsize=14.5)
+s.box(xs[1],y2,w+20,h,"10  Next round",("The editor agent reads","the numbers, runs an","A/B test within the","rails, briefs authors"),"agent",size=12.5,tsize=14.5)
 s.arrow([(xs[6]+w/2,y1+h),(xs[6]+w/2,y2)])
 s.text(xs[6]+w/2+10,y1+h+(y2-y1-h)/2+4,"the audience reacts",12,"400","start","#52606d")
 s.arrow([(xs[6],y2+h/2),(xs[4]-w/2-gap/2+20+w+40,y2+h/2)])
