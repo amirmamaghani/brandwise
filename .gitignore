@@ -16,3 +16,5 @@ graphify-out
 .archify
 .previews
 tools/satori-spike/out
+__pycache__
+*.pyc
