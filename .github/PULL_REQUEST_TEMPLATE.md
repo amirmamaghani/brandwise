@@ -11,4 +11,4 @@
 - [ ] Tests added or updated; `npm test` (packages/core) and `npx tsc --noEmit` (plugin) pass
 - [ ] Respects the design rules in CONTRIBUTING.md (calendar is the only way out, no credentials for agents, provider-neutral domain)
 - [ ] No secrets, `.env`, customer data or generated creatives committed
-- [ ] Docs updated if behaviour changed
+- [ ] Docs updated if behaviour changed, and everything I wrote is in English

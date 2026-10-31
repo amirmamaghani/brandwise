@@ -1,188 +1,188 @@
-# E-mail: metriky a providery
+# Email: metrics and providers
 
-**Stav: kroky 1 až 3 sú postavené** (doména, úložisko, `email stats`, webhook, adaptér Resend a testovací provider `memory`), kód je v `packages/core/src/email/`. Overené testami (17 prechádza, vrátane integračného s databázou). **Živý beh cez Resend ešte nebol**, chýbajú kľúč, doména, segment a verejná adresa webhooku. Druhý provider zatiaľ nie je. Tvrdenia o schopnostiach konkrétnych providerov sa overujú pri písaní jeho adaptéra, nie tu.
+**Status: steps 1 to 3 are built** (domain, store, `email stats`, webhook, Resend adapter and the `memory` test provider), the code is in `packages/core/src/email/`. Verified by tests (17 pass, including an integration test with the database). **There has been no live run through Resend yet**; the key, domain, segment and public webhook address are missing. There is no second provider yet. Claims about the capabilities of specific providers are verified when writing that provider's adapter, not here.
 
-## 1. Katalóg metrík
+## 1. Metrics catalog
 
-Základné pravidlo: **každá metrika má jednu definíciu v kóde** (čitateľ, menovateľ, okno). „Open rate“ nie je číslo providera, ale naša funkcia nad udalosťami, takže sa dá porovnať medzi providermi.
+Basic rule: **every metric has one definition in code** (numerator, denominator, window). "Open rate" is not a provider number but our function over events, so it can be compared across providers.
 
-**Odoslanie a doručenie**
-- odoslané (sent), doručené (delivered), doručiteľnosť = doručené / odoslané
-- bounce: tvrdý (hard, trvalý), mäkký (soft, dočasný), s podtypom (schránka plná, neexistuje, blokovaný obsah, reputácia); bounce rate = bounce / odoslané
-- odložené (deferred, delayed), zahodené (dropped, rejected, blocked), potlačené (suppressed pred odoslaním), zlyhané (failed)
-- umiestnenie v schránke (inbox placement) a podiel do spamu (zo seed testov), spam trap zásahy
+**Sending and delivery**
+- sent, delivered, deliverability = delivered / sent
+- bounce: hard (permanent), soft (temporary), with a subtype (mailbox full, does not exist, blocked content, reputation); bounce rate = bounce / sent
+- deferred (delayed), dropped (rejected, blocked), suppressed (before sending), failed
+- inbox placement and spam share (from seed tests), spam trap hits
 
-**Angažovanosť**
-- otvorenia: celkové, unikátne; open rate = unikátne otvorenia / doručené
-- **strojové otvorenia** (Apple Mail Privacy Protection, proxy na načítanie obrázkov) oddelene od ľudských, ak provider rozlišuje
-- kliky: celkové, unikátne; CTR = unikátne kliky / doručené; **CTOR** = unikátne kliky / unikátne otvorenia; kliky podľa odkazu a pozície (heatmapa)
-- odpovede (reply rate), preposlania (forward), tlač, čas čítania (skim, read), čas do otvorenia a do kliknutia
-- rozmery: zariadenie, e-mailový klient, OS, krajina a mesto, jazyk, hodina a deň týždňa
+**Engagement**
+- opens: total, unique; open rate = unique opens / delivered
+- **machine opens** (Apple Mail Privacy Protection, image-loading proxies) separate from human ones, if the provider distinguishes them
+- clicks: total, unique; CTR = unique clicks / delivered; **CTOR** = unique clicks / unique opens; clicks by link and position (heatmap)
+- replies (reply rate), forwards, prints, reading time (skim, read), time to open and to click
+- dimensions: device, email client, OS, country and city, language, hour and day of week
 
-**Zdravie zoznamu**
-- odhlásenia (unsubscribe rate), sťažnosti na spam (complaint rate, spätná väzba od mailboxov), pridané do potlačených
-- noví odberatelia, čistý rast, odliv (churn), opätovné prihlásenia, miera potvrdenia double opt-in, rast podľa zdroja
-- podiel aktívnych odberateľov (otvorili alebo klikli za 90 dní), neaktívni a kandidáti na vyčistenie
+**List health**
+- unsubscribes (unsubscribe rate), spam complaints (complaint rate, mailbox feedback loops), added to suppressions
+- new subscribers, net growth, churn, re-subscribes, double opt-in confirmation rate, growth by source
+- share of active subscribers (opened or clicked in 90 days), inactive ones and cleanup candidates
 
-**Konverzie a výnosy**
-- konverzie a miera konverzie, ciele (rezervácia dema, registrácia, nákup), konverzia landing stránky
-- výnos, výnos na e-mail a na príjemcu, priemerná hodnota objednávky, ROI, cena za akvizíciu, LTV z e-mailu
-- atribúcia: okno (napr. 1, 7, 30 dní), posledný klik alebo viacero dotykov
+**Conversions and revenue**
+- conversions and conversion rate, goals (demo booking, signup, purchase), landing page conversion
+- revenue, revenue per email and per recipient, average order value, ROI, cost per acquisition, LTV from email
+- attribution: window (e.g. 1, 7, 30 days), last click or multi-touch
 
-**Reputácia a technika**
-- úspešnosť SPF, DKIM, DMARC a zarovnania, reporty DMARC, BIMI, blacklisty
-- reputácia domény a IP, podiel sťažností (limity veľkých mailboxov: pod 0,1 % cieľ, 0,3 % strop), sender score
+**Reputation and technical**
+- SPF, DKIM, DMARC and alignment pass rate, DMARC reports, BIMI, blacklists
+- domain and IP reputation, complaint share (limits of the big mailbox providers: under 0.1% target, 0.3% ceiling), sender score
 
-**Experimenty a automatizácie**
-- A/B: rozdiel (lift), štatistická významnosť, víťazný variant; holdout (prírastkový efekt oproti neposlaným); zlepšenie z optimalizácie času
-- toky (flows): vstupy a výstupy, dokončenie krokov, odpad medzi krokmi, čas v toku, čas od spúšťača po konverziu
-- frekvencia a únava (počet e-mailov na osobu a obdobie, pokles angažovanosti)
+**Experiments and automations**
+- A/B: difference (lift), statistical significance, winning variant; holdout (incremental effect versus unsent); improvement from send-time optimization
+- flows: entries and exits, step completion, drop-off between steps, time in flow, time from trigger to conversion
+- frequency and fatigue (emails per person and period, drop in engagement)
 
-Pre rozhodnutia platí: **kliky, konverzie a odhlásenia sú spoľahlivé, otvorenia nie** (pixel, strojové otvorenia, e-mailové klienty ho blokujú). Katalóg preto označuje každú metriku ako `reliable` alebo `indicative`, aby ju agent nemiešal.
+For decisions: **clicks, conversions and unsubscribes are reliable, opens are not** (pixel, machine opens, email clients block it). The catalog therefore marks each metric as `reliable` or `indicative`, so the agent does not mix them up.
 
-## 2. Vrstvy a smer závislostí
+## 2. Layers and dependency direction
 
 ```
-Kalendár ──► Connector "email" ──► E-mail doména ◄── Adaptéry (Resend, Brevo, memory, ...)
- (publish)    (tenký, vyberá          (typy, porty,       (prekladajú API providera
-              providera podľa          metriky, ingest)     na naše typy; nič iné)
-              cieľa kampane)                ▲
-                                            │
-                                  Úložisko udalostí (Postgres)
+Calendar ──► Connector "email" ──► Email domain ◄── Adapters (Resend, Brevo, memory, ...)
+ (publish)    (thin, picks the        (types, ports,       (translate the provider API
+              provider by the          metrics, ingest)     into our types; nothing else)
+              campaign target)                ▲
+                                              │
+                                    Event store (Postgres)
 ```
 
-Pravidlá (vynucuje ich test, ktorý prechádza importy):
-1. **Doména** (`email/domain/`): typy, porty, katalóg metrík, vzorce. Nič nezávisí od providera, databázy ani S3. Je to čistý TypeScript.
-2. **Adaptéry** (`email/adapters/<id>.ts`) importujú len doménu. Nepoznajú databázu, kalendár ani plugin. Sú to čisté funkcie: vstup providera na naše typy a naše typy na volanie providera.
-3. **Úložisko** (`email/store.ts`) implementuje port `EventStore` nad Postgresom. Doména ho pozná len ako rozhranie.
-4. **Connector `email`** je tenká vrstva medzi kalendárom a doménou. Providera vyberá z cieľa kampane (`provider=resend`), takže **výmena providera je zmena jedného nastavenia**, nie kódu.
-5. **Zloženie** (jediné miesto, ktoré pozná všetko): v plugine sa z nastavení postavia adaptéry a zaregistrujú sa. Poverenia sa predávajú konštruktorom, nikdy nie globálne.
+Rules (enforced by a test that walks the imports):
+1. **Domain** (`email/domain/`): types, ports, metrics catalog, formulas. Nothing depends on a provider, the database or S3. It is pure TypeScript.
+2. **Adapters** (`email/adapters/<id>.ts`) import only the domain. They know nothing about the database, the calendar or the plugin. They are pure functions: provider input into our types, and our types into a provider call.
+3. **Store** (`email/store.ts`) implements the `EventStore` port on top of Postgres. The domain knows it only as an interface.
+4. **Connector `email`** is a thin layer between the calendar and the domain. It picks the provider from the campaign target (`provider=resend`), so **swapping the provider is a change of one setting**, not of code.
+5. **Composition** (the only place that knows everything): in the plugin, adapters are built from the settings and registered. Credentials are passed through constructors, never globally.
 
-## 3. Porty (rozhrania podľa zodpovednosti)
+## 3. Ports (interfaces by responsibility)
 
-Pôvodný jeden veľký `EmailAdapter` bol príliš široký: miešal odosielanie, príjem udalostí a nastavenie. Provider môže vedieť len časť (napr. len SMTP nemá udalosti, provider len so súhrnmi nemá webhooky). Preto tri malé porty, ktoré adaptér implementuje podľa potreby:
+The original single large `EmailAdapter` was too broad: it mixed sending, event intake and setup. A provider may know only part of it (e.g. plain SMTP has no events, a provider with only totals has no webhooks). So there are three small ports, which an adapter implements as needed:
 
 ```ts
-// odosielanie (volá ho connector z kalendára)
+// sending (called by the connector from the calendar)
 interface EmailSender {
   readonly id: string;
-  createCampaign(draft: CampaignDraft): Promise<{ externalId: string }>;   // vždy koncept
+  createCampaign(draft: CampaignDraft): Promise<{ externalId: string }>;   // always a draft
   schedule(externalId: string, at: Date): Promise<void>;
   sendTest?(externalId: string, to: string[]): Promise<void>;
   cancel?(externalId: string): Promise<void>;
 }
 
-// príjem udalostí (volá ho webhook trasa alebo plánovač dopytovania)
+// event intake (called by the webhook route or the polling scheduler)
 interface EmailEventSource {
   readonly id: string;
-  parseWebhook?(req: { headers: Headers; body: string }): EmailEvent[];    // overí podpis, nič nezapisuje
-  pull?(since: Date): AsyncIterable<EmailEvent>;                           // ak provider nemá webhooky
-  pullTotals?(send: SendRef): Promise<Counts>;                             // ak dáva len súhrny
+  parseWebhook?(req: { headers: Headers; body: string }): EmailEvent[];    // verifies the signature, writes nothing
+  pull?(since: Date): AsyncIterable<EmailEvent>;                           // if the provider has no webhooks
+  pullTotals?(send: SendRef): Promise<Counts>;                             // if it gives only totals
 }
 
-// stav sledovania (voliteľné; "je zapnuté sledovanie otvorení a klikov?")
+// tracking state (optional; "is open and click tracking enabled?")
 interface TrackingCheck { status(): Promise<TrackingStatus>; }
 
 type EmailProvider = { id: string; capabilities: Capabilities; sender?: EmailSender; events?: EmailEventSource; tracking?: TrackingCheck };
 ```
 
-Adaptér nikdy nezapisuje do databázy: vráti udalosti a **príjem** ich uloží (jedna `ingest(events)` funkcia v doméne, ktorú používa webhook aj dopytovanie). Dedup, ukladanie a prepočty sú na jednom mieste.
+An adapter never writes to the database: it returns events and **intake** stores them (one `ingest(events)` function in the domain, used by both the webhook and polling). Dedup, storage and recalculation are in one place.
 
-## 4. Schopnosti určujú dostupnosť metrík (nič sa nepíše ručne podľa providera)
+## 4. Capabilities determine metric availability (nothing is written by hand per provider)
 
 ```ts
 type Capabilities = {
-  emits: ReadonlySet<EventType>;       // ktoré udalosti provider vie poslať: sent, delivered, opened, clicked, bounced, ...
-  details: ReadonlySet<DetailKey>;     // ktoré detaily: link, bounceClass, bounceReason, machine, device, country, ...
+  emits: ReadonlySet<EventType>;       // which events the provider can send: sent, delivered, opened, clicked, bounced, ...
+  details: ReadonlySet<DetailKey>;     // which details: link, bounceClass, bounceReason, machine, device, country, ...
   features: ReadonlySet<Feature>;      // drafts, scheduling, sendTest, segments, abTest, subAccounts, ...
 };
 ```
 
-Každá metrika v katalógu deklaruje, čo potrebuje: `requires: { events: ["delivered","clicked"], details: [] }`. Dostupnosť je odvodená: metrika je dostupná, ak `requires ⊆ capabilities` providera, ktorým bola kampaň odoslaná. Nová schopnosť providera = jedno pole v jeho deklarácii a metriky sa samy odomknú. Metrika, ktorú provider nevie, sa ukáže ako „nedostupné“ (nikdy ako 0).
+Every metric in the catalog declares what it needs: `requires: { events: ["delivered","clicked"], details: [] }`. Availability is derived: a metric is available if `requires ⊆ capabilities` of the provider that sent the campaign. A new provider capability = one field in its declaration and the metrics unlock themselves. A metric the provider cannot supply shows as "unavailable" (never as 0).
 
-## 5. Normalizovaná udalosť a naše identifikátory
+## 5. Normalized event and our identifiers
 
 ```ts
 type EmailEvent = {
   provider: string;
-  providerEventId: string;            // dedup spolu s `provider`: webhooky chodia "aspoň raz"
+  providerEventId: string;            // dedup together with `provider`: webhooks arrive "at least once"
   type: EventType;                    // sent | delivered | deferred | bounced | dropped | suppressed | failed | opened | clicked | unsubscribed | complained | replied
   at: string;                         // UTC
-  sendId: string;                     // NÁŠ identifikátor odoslania (nie providera), viď nižšie
+  sendId: string;                     // OUR send identifier (not the provider's), see below
   recipient: { hash: string; domain: string };
   detail: { bounceClass?; bounceReason?; link?; linkPosition?; machine?: boolean | null; device?; client?; country? };
-  raw: unknown;                       // celý pôvodný payload bezstratovo
+  raw: unknown;                       // the whole original payload, lossless
   schemaVersion: 1;
 };
 ```
 
-**Prečo výmena providera nerozbije štatistiky:** všetko sa viaže na **naše** `send`, nie na identifikátory providera.
-- Pri odoslaní vznikne záznam `email_send(id, entry_id, provider, external_id, capabilities_snapshot, created_at)`. Provider dostane naše `send_id` ako tag alebo metadáta (každý adaptér to prekladá vlastným spôsobom: tag, custom header, utm; kontraktový test overí, že sa vráti v udalosti).
-- Udalosti nesú `sendId`. Metriky sa počítajú podľa `entry_id` alebo kampane cez `email_send`, **nikdy podľa providera**.
-- Zmena providera v polovici roka: staré odoslania ostanú s Resend a jeho udalosťami, nové idú cez nový. Prehľad kampane alebo obdobia ich sčíta, lebo obe sú v tom istom tvare.
+**Why swapping the provider does not break the statistics:** everything is tied to **our** `send`, not to provider identifiers.
+- On send, a record `email_send(id, entry_id, provider, external_id, capabilities_snapshot, created_at)` is created. The provider receives our `send_id` as a tag or metadata (each adapter translates this in its own way: tag, custom header, utm; a contract test verifies that it comes back in the event).
+- Events carry `sendId`. Metrics are computed by `entry_id` or campaign through `email_send`, **never by provider**.
+- Changing the provider mid-year: old sends stay with Resend and its events, new ones go through the new one. The campaign or period overview sums them, because both are in the same shape.
 
-## 6. Metriky: jeden tvar vstupu, tri zdroje
+## 6. Metrics: one input shape, three sources
 
-Vzorce sú čisté funkcie nad **`Counts`**, nie nad udalosťami ani nad providerom:
+Formulas are pure functions over **`Counts`**, not over events or over the provider:
 
 ```ts
 type Counts = { sent; delivered; bounced: { hard; soft }; opened: { total; unique; humanUnique? }; clicked: { total; unique; perLink? }; unsubscribed; complained; ... };
 ```
 
-- **Z udalostí** (hlavný zdroj): `eventsToCounts(events)`. Unikátnosť počítame **my** (príjemca + `sendId`), nie podľa príznaku providera, aby bola rovnaká všade.
-- **Zo súhrnov providera** (len ak provider nemá udalosti): `pullTotals` vráti `Counts` priamo. Metriky závislé od detailov (per odkaz, strojové otvorenia) sa potom označia ako nedostupné.
-- **Prepočet** `Counts` na metriky (`open_rate`, `ctr`, `ctor`, `bounce_rate`, ...) je jediné miesto s vzorcami a menovateľmi, spoločné pre všetkých providerov.
-- Katalóg označuje metriky `reliable` alebo `indicative` (otvorenia sú orientačné). Strojové otvorenia sa odpočítajú, ak ich provider rozlišuje (`machine` nie je `null`), inak je metrika `indicative`.
+- **From events** (main source): `eventsToCounts(events)`. Uniqueness is computed by **us** (recipient + `sendId`), not by the provider's flag, so it is the same everywhere.
+- **From provider totals** (only if the provider has no events): `pullTotals` returns `Counts` directly. Metrics that depend on details (per link, machine opens) are then marked unavailable.
+- **Recalculation** of `Counts` into metrics (`open_rate`, `ctr`, `ctor`, `bounce_rate`, ...) is the only place with formulas and denominators, shared by all providers.
+- The catalog marks metrics as `reliable` or `indicative` (opens are indicative). Machine opens are subtracted if the provider distinguishes them (`machine` is not `null`), otherwise the metric is `indicative`.
 
-Agent číta len výsledky: `email stats <záznam | kampaň | obdobie>`.
+The agent reads only results: `email stats <entry | campaign | period>`.
 
-## 7. Webhooky a príjem
+## 7. Webhooks and intake
 
-- Jedna trasa pluginu `/webhooks/email/<provider>`. Vyhľadá adaptér v registri a zavolá `events.parseWebhook`. Zlý podpis → 401 bez zápisu. Duplicita → 200 (už uložené). Neznáma udalosť providera → uloží sa len `raw` s typom `unknown`, nič nespadne.
-- Poverenia a podpisové kľúče sú v nastaveniach pluginu a do adaptéra idú ako parametre konštruktora.
-- Dopytovanie (`pull`) je plánovaná bb automation, rovnako ako scheduler, a volá tú istú funkciu `ingest`.
+- One plugin route `/webhooks/email/<provider>`. It looks up the adapter in the registry and calls `events.parseWebhook`. Bad signature → 401 with no write. Duplicate → 200 (already stored). Unknown provider event → only `raw` is stored with type `unknown`, nothing crashes.
+- Credentials and signing keys are in the plugin settings and go to the adapter as constructor parameters.
+- Polling (`pull`) is a scheduled bb automation, just like the scheduler, and calls the same `ingest` function.
 
-## 8. Rozloženie súborov
+## 8. File layout
 
 ```
 packages/core/src/email/
-  domain/        types.ts  ports.ts  capabilities.ts  metrics.ts  counts.ts  ingest.ts   (čistá doména, bez pg a S3)
-  adapters/      memory.ts (testovací provider, vyrába udalosti)  resend.ts  index.ts (zoznam)
-  store.ts       EventStore nad Postgresom (email_send, email_event)
-  connector.ts   Connector "email" pre calendar publish (vyberá providera z cieľa kampane)
-  email.arch.test.ts   vynucuje pravidlá závislostí (domain nič neimportuje; adaptér len domain)
+  domain/        types.ts  ports.ts  capabilities.ts  metrics.ts  counts.ts  ingest.ts   (pure domain, no pg or S3)
+  adapters/      memory.ts (test provider, produces events)  resend.ts  index.ts (list)
+  store.ts       EventStore on Postgres (email_send, email_event)
+  connector.ts   Connector "email" for calendar publish (picks the provider from the campaign target)
+  email.arch.test.ts   enforces the dependency rules (domain imports nothing; adapter only domain)
 ```
 
-Poznámka k buildu: provisioning teraz kopíruje `packages/core/src/*.ts` plochým kopírovaním (bb odmieta importy mimo priečinka pluginu). Podpriečinky treba kopírovať rekurzívne, to je malá úprava `provision.sh`.
+Build note: provisioning currently copies `packages/core/src/*.ts` with a flat copy (bb rejects imports outside the plugin folder). Subfolders must be copied recursively, which is a small change to `provision.sh`.
 
-## 9. Ako sa pridáva provider
+## 9. How to add a provider
 
-1. `adapters/<id>.ts`: funkcia `<id>Provider(config): EmailProvider` s deklarovanými schopnosťami a tými portami, ktoré provider vie. Nič iné sa nemení.
-2. Zápis do `adapters/index.ts`.
-3. **Kontraktové testy** (jedna sada pre všetky adaptére, spúšťa sa aj nad `memory`): zaznamenané payloady → očakávané `EmailEvent`; `sendId` sa vráti v udalosti; zlý podpis sa odmietne; koncept sa nikdy neodošle bez `schedule`; schopnosti zodpovedajú tomu, čo adaptér reálne emituje.
-4. Z deklarovaných schopností sa generuje tabuľka „čo ktorý provider vie“.
-5. Cieľ kampane: `bb brandwise campaign channel set email provider=<id> list=<...> from=<...>`.
+1. `adapters/<id>.ts`: a function `<id>Provider(config): EmailProvider` with declared capabilities and the ports the provider supports. Nothing else changes.
+2. Add it to `adapters/index.ts`.
+3. **Contract tests** (one suite for all adapters, also run over `memory`): recorded payloads → expected `EmailEvent`; `sendId` comes back in the event; a bad signature is rejected; a draft is never sent without `schedule`; capabilities match what the adapter actually emits.
+4. The "what each provider can do" table is generated from the declared capabilities.
+5. Campaign target: `bb brandwise campaign channel set email provider=<id> list=<...> from=<...>`.
 
-## 10. Poradie stavby
+## 10. Build order
 
-1. Doména (typy, porty, `Counts`, katalóg metrík, `ingest`) a provider `memory` s kontraktovými testami a testom závislostí. Bez Resend, bez siete.
-2. `store.ts` (migrácia `email_send`, `email_event`), `email stats`, trasa webhooku.
-3. Adaptér Resend (sender, event source, tracking check) a kontraktové testy na jeho fixtúrach.
-4. **Druhý provider** (Brevo alebo MailerLite) ako skúška abstrakcie: ak vyžaduje zmenu domény, abstrakcia bola zlá a opraví sa tu, nie obchádzkou.
-5. Konverzie (`bw_eid`, UTM, udalosti z webu) a A/B testy.
+1. Domain (types, ports, `Counts`, metrics catalog, `ingest`) and the `memory` provider with contract tests and the dependency test. No Resend, no network.
+2. `store.ts` (migration `email_send`, `email_event`), `email stats`, webhook route.
+3. Resend adapter (sender, event source, tracking check) and contract tests on its fixtures.
+4. **Second provider** (Brevo or MailerLite) as a test of the abstraction: if it requires a domain change, the abstraction was wrong and gets fixed here, not worked around.
+5. Conversions (`bw_eid`, UTM, events from the web) and A/B tests.
 
-## 11. Čo je potrebné vedieť pred stavbou
+## 11. What to know before building
 
-- Presné schopnosti Resend (polia udalosti pri otvorení, zoznam e-mailov, polia Broadcast API) a ceny sa overia pri adaptéri.
-- Právo: ukladáme hash príjemcu (so soľou inštalácie) a doménu, nie adresy. Zoznamy, súhlas a potlačenie ostávajú u providera.
-- Test závislostí treba písať ako súčasť kroku 1, inak sa pravidlá časom porušia.
+- The exact capabilities of Resend (event fields on open, email list, Broadcast API fields) and prices are verified at the adapter.
+- Legal: we store the recipient hash (with the installation salt) and the domain, not addresses. Lists, consent and suppression stay with the provider.
+- The dependency test must be written as part of step 1, otherwise the rules get broken over time.
 
-## 12. Čo sa pri stavbe zmenilo oproti návrhu vyššie
+## 12. What changed during the build compared to the design above
 
-- **Udalosť nesie `ref`, nie `sendId`:** `{ sendId?, externalId? }`. Resend nepodporuje tagy na kampaniach (Broadcasts), takže udalosť sa k nášmu odoslaniu priradí cez `broadcast_id` (`email_send.external_id`). Udalosť, ktorá príde skôr, než poznáme odoslanie, sa uloží a pripojí pri `recordSend`.
-- **`send(externalId, { at? })` namiesto `schedule`:** scheduler spúšťa záznam až v jeho čase, takže sa posiela hneď. `sendTest` a `TrackingCheck` sa nestavali (v Resende nie je overený endpoint na stav sledovania domény).
-- **Jedno odoslanie na záznam** (`email_send.entry_id` je unikátny): opakovanie po zlyhaní použije ten istý koncept a vopred sa opýta providera, či už neodišiel (`status`), takže sa nikdy nevytvorí druhá kampaň ani druhé odoslanie.
-- **Súkromie:** `raw` neobsahuje adresy ani IP (adaptér ich nahradí pred uložením). Príjemca je soľený hash a doména; soľ je tajomstvo pluginu.
-- **Webhook** je HTTP trasa pluginu bez prihlásenia bb (`auth: "none"`, bb to povoľuje len pre podpísané webhooky); bez platného podpisu sa nič neuloží.
-- **Telo e-mailu:** `title` záznamu je predmet, `body` je text (alebo HTML, ak začína `<`), `link` dostane UTM značky. Odkaz na odhlásenie sa pridá vždy, ak ho telo nemá.
-- **Neriešené:** odhlásenia (Resend ich hlási ako kontaktné udalosti, nie e-mailové, takže `unsubscribe_rate` je pri Resend „nedostupné“), segmentácia, A/B, konverzie (`bw_eid`), kontrola tvrdení pred schválením.
+- **The event carries `ref`, not `sendId`:** `{ sendId?, externalId? }`. Resend does not support tags on campaigns (Broadcasts), so the event is matched to our send via `broadcast_id` (`email_send.external_id`). An event that arrives before we know the send is stored and attached at `recordSend`.
+- **`send(externalId, { at? })` instead of `schedule`:** the scheduler triggers the entry only at its time, so it sends immediately. `sendTest` and `TrackingCheck` were not built (Resend has no verified endpoint for domain tracking status).
+- **One send per entry** (`email_send.entry_id` is unique): a retry after a failure uses the same draft and first asks the provider whether it has already gone out (`status`), so a second campaign or second send is never created.
+- **Privacy:** `raw` contains no addresses or IPs (the adapter replaces them before storing). The recipient is a salted hash and the domain; the salt is a plugin secret.
+- **Webhook** is a plugin HTTP route without bb login (`auth: "none"`, which bb allows only for signed webhooks); without a valid signature nothing is stored.
+- **Email body:** the entry `title` is the subject, `body` is text (or HTML if it starts with `<`), `link` gets UTM tags. An unsubscribe link is always added if the body does not have one.
+- **Not addressed:** unsubscribes (Resend reports them as contact events, not email events, so `unsubscribe_rate` is "unavailable" for Resend), segmentation, A/B, conversions (`bw_eid`), claim checks before approval.

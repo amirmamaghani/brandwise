@@ -10,6 +10,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
+      - name: Markdown is English
+        run: tools/check-english.sh
       - name: Core tests (unit; database tests skip without DATABASE_URL)
         working-directory: packages/core
         run: npm install && npm test

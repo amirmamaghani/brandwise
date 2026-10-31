@@ -36,7 +36,7 @@ agents / MCP ──► bb brandwise CLI ──► plugin ──► packages/core
 - `packages/core`: campaigns, calendar, assets, publishing and the e-mail module on Postgres and S3. No bb dependency.
 - `packages/video-remotion`: the optional Remotion engine.
 - `infra`: local Postgres and an S3 emulator (Docker), and provisioning of a dedicated bb instance.
-- `docs`: design notes (in Slovak for now), see [`docs/roadmap.md`](docs/roadmap.md) and [`docs/email.md`](docs/email.md).
+- `docs`: design notes, see [`docs/roadmap.md`](docs/roadmap.md) and [`docs/email.md`](docs/email.md).
 
 ## Quick start (local)
 
@@ -79,4 +79,4 @@ BrandWise is MIT licensed (see [LICENSE](LICENSE)). Third-party pieces have thei
 
 ## Contributing
 
-Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, see [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+Everything in the repository is written in English. Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, see [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).

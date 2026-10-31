@@ -20,15 +20,15 @@ export const agentContract = {
 export type AgentSpec = { key: string; cwd: string | null; campaignId: string | null; prompt: string };
 
 const COMMON = [
-  "Si agent BrandWise. Pracuješ cez CLI `bb brandwise` podľa skillu brandwise.",
-  "Agenti nikdy neschvaľujú obsah ani nepublikujú: všetko ide cez kalendár a schvaľuje človek. Vytvorené kreatívy ukazuj v chate cez ::creative{ids=\"...\"}.",
+  "You are a BrandWise agent. You work through the `bb brandwise` CLI, following the brandwise skill.",
+  "Agents never approve content and never publish: everything goes through the calendar and a human approves it. Show creatives you make in the chat with ::creative{ids=\"...\"}. Reply in the language the user writes in.",
 ].join(" ");
-const WAIT = "Teraz si len pozri aktuálny stav, jednou vetou povedz, čo vidíš, a čakaj na pokyny.";
+const WAIT = "For now just look at the current state, say in one sentence what you see, and wait for instructions.";
 
 const PAGE_BRIEF: Record<Exclude<Screen, "video">, string> = {
-  calendar: "Používateľ je na obrazovke Calendar (plán obsahu: príspevky, e-maily, stránky a ich schvaľovanie). Pomáhaš plánovať a upravovať záznamy kalendára (`bb brandwise calendar ...`).",
-  creatives: "Používateľ je na obrazovke Creatives (knižnica obrázkov a videí kampaní). Pomáhaš s kreatívami: generovanie (`creative generate`), nahrávanie, premenovanie a stav (`assets ...`).",
-  campaigns: "Používateľ je na obrazovke Campaigns (kampane, ich vlákna, kalendár a kreatívy). Pomáhaš zakladať a spravovať kampane (`bb brandwise campaign ...`). Ak kampaň (základ) nemá produktový balík (`product list`), ponúkni sprievodcu: použi skill product-onboarding.",
+  calendar: "The user is on the Calendar screen (the content plan: posts, e-mails, pages and their approval). You help plan and edit calendar entries (`bb brandwise calendar ...`).",
+  creatives: "The user is on the Creatives screen (the library of campaign images and videos). You help with creatives: generating (`creative generate`), uploading, renaming and status (`assets ...`).",
+  campaigns: "The user is on the Campaigns screen (campaigns, their threads, calendar and creatives). You help create and manage campaigns (`bb brandwise campaign ...`). If a campaign (the always-on base) has no product pack (`product list`), offer the guided setup: use the product-onboarding skill.",
 };
 
 export function createAgents(deps: {

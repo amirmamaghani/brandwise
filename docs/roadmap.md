@@ -1,162 +1,162 @@
-# Plán: čo ostáva spraviť
+# Plan: what is left to do
 
-Stav k 2026-10-30. Rozhodnutie: **všetko beží na bb**, bez Vercel AI SDK a bez DBOS. Agent = bb vlákno (Claude Code), nástroje = `bb brandwise` (CLI a MCP), plánovanie = bb automations, schvaľovanie a upozornenia = stránka Calendar a bb push notifications, prihlasovacie údaje = bb `secrets`. Stav, ktorý musí prežiť (kalendár, limity, metriky), je v Postgrese.
+Status as of 2026-10-30. Decision: **everything runs on bb**, with no Vercel AI SDK and no DBOS. Agent = bb thread (Claude Code), tools = `bb brandwise` (CLI and MCP), scheduling = bb automations, approvals and notifications = the Calendar page and bb push notifications, credentials = bb `secrets`. State that must survive (calendar, limits, metrics) lives in Postgres.
 
-## Poradie
+## Order
 
-1. Scheduler (`calendar run-due` z bb automation)
-2. Konektory (publikovanie)
-3. Limity a spotreba (usage)
-4. Produkt: sprievodca a MD balík
+1. Scheduler (`calendar run-due` from a bb automation)
+2. Connectors (publishing)
+3. Limits and usage
+4. Product: wizard and MD bundle
 5. Claims lint
-6. Metriky a spätná väzba
-7. Moderácia komentárov
-8. Výskumné nástroje
-9. Roly (persony) a upozornenia
+6. Metrics and feedback
+7. Comment moderation
+8. Research tools
+9. Roles (personas) and notifications
 
-Body 1 až 3 sú nutné, aby sa čokoľvek dostalo von. Zvyšok sa dá robiť v poradí, v akom to prinesie hodnotu prvému klientovi.
+Items 1 to 3 are required for anything to get out the door. The rest can be done in the order that brings the first client the most value.
 
-## 1. Scheduler: bb automation volá náš príkaz
+## 1. Scheduler: a bb automation calls our command
 
-**Rozhodnutie:** minútový *script automation* spustí `bb brandwise calendar run-due`. Žiadny vlastný démon, žiadne DBOS.
+**Decision:** a one-minute *script automation* runs `bb brandwise calendar run-due`. No custom daemon, no DBOS.
 
-Prečo je to najčistejšie voči bb:
-- automations sú súčasť bb (cron, história behov, výstup, pozastavenie, retry viditeľné v UI), nepridávame novú infraštruktúru,
-- script, ktorý nič nevypíše, sa zapíše ako tichý tik (žiadny šum),
-- logika zostáva v našom plugine (jeden príkaz), automation je len budík. Vymeniteľné za iný budík bez zmeny logiky,
-- vytvorí ho `provision.sh apply` deklaratívne (`bb automation create --cron "* * * * *"`), ako ostatné nastavenia inštancie.
+Why this is the cleanest fit with bb:
+- automations are part of bb (cron, run history, output, pause, retries visible in the UI), so we add no new infrastructure,
+- a script that prints nothing is recorded as a silent tick (no noise),
+- the logic stays in our plugin (one command), the automation is just an alarm clock. It can be swapped for another alarm clock without changing the logic,
+- `provision.sh apply` creates it declaratively (`bb automation create --cron "* * * * *"`), like the other instance settings.
 
-Ako `run-due` funguje:
-1. V jednej transakcii vyberie záznamy `approved` a `scheduled_at <= now()` príkazom `... FOR UPDATE SKIP LOCKED` a nastaví `publishing` (druhý tik ich nevezme znova).
-2. Pre každý zavolá konektor (bod 2) s `idempotency_key`. Úspech: `published`, `external_id`. Chyba: `attempts + 1`, `next_attempt_at` s exponenciálnym oneskorením. Po 3. pokuse `failed` a upozornenie (bod 7).
-3. Pred odpálením znovu skontroluje schválenie, limity (bod 2) a claims (bod 4). Zmena od schválenia = späť do `pending_approval`.
-4. Záznamy, ktoré zostali v `publishing` dlhšie než časový limit (spadol proces), sa vrátia do `approved`; idempotency key chráni pred dvojitým odoslaním.
+How `run-due` works:
+1. In one transaction it selects entries that are `approved` with `scheduled_at <= now()` using `... FOR UPDATE SKIP LOCKED` and sets them to `publishing` (the next tick will not pick them up again).
+2. For each one it calls the connector (item 2) with an `idempotency_key`. Success: `published`, `external_id`. Failure: `attempts + 1`, `next_attempt_at` with exponential backoff. After the 3rd attempt: `failed` and a notification (item 7).
+3. Before firing it re-checks the approval, limits (item 2) and claims (item 4). Any change since approval = back to `pending_approval`.
+4. Entries that stayed in `publishing` longer than the timeout (the process crashed) go back to `approved`; the idempotency key protects against double sending.
 
-Riziká na overenie v prvom teste: automation script dostáva `BB_SERVER_URL`, ale nie `BB_HOST_DAEMON_PORT`; treba overiť, že `bb brandwise ...` v ňom zasiahne správnu inštanciu. Najkratší cyklus je 1 minúta (stačí pre sociálne siete). Vypnutý plugin Automations (napr. v nejakom móde) = nič sa nepublikuje, preto provisioning kontroluje, že beží.
+Risks to verify in the first test: the automation script receives `BB_SERVER_URL` but not `BB_HOST_DAEMON_PORT`; we need to verify that `bb brandwise ...` inside it hits the right instance. The shortest cycle is 1 minute (enough for social networks). A disabled Automations plugin (e.g. in some mode) = nothing gets published, so provisioning checks that it is running.
 
-**Stav: hotové (2026-10-30).** `calendar run-due` v `packages/core/src/publish.ts`, stavy `publishing` a `needs_manual`, konektor `mock`, test v `core.test.ts`, automation zakladá `provision.sh apply`. Overené naživo: záznam s časom o minútu sa sám publikoval, záznam s `[fail]` v názve sa opakuje.
+**Status: done (2026-10-30).** `calendar run-due` in `packages/core/src/publish.ts`, states `publishing` and `needs_manual`, connector `mock`, test in `core.test.ts`, the automation is created by `provision.sh apply`. Verified live: an entry scheduled one minute ahead published itself, an entry with `[fail]` in its title keeps retrying.
 
-Pasce, na ktoré sme narazili (zapísané aj v provisioning skripte):
-- bb dáva do skriptov automation `BB_SERVER_URL` na predvolený server (osobný bb, 38886); skript si ho nastaví z `BB_SERVER_PORT`.
-- bb dáva do nich `BB_CLI` na launcher v `<data dir>/bin/bb`, ktorý sa re-execuje donekonečna (stovky procesov za sekundu). Skript musí nastaviť `BB_CLI="$BB_CLI_DIR/bb"` a volať ho priamo.
-- Skript, ktorý skončí na časový limit, neukáže žiadny výstup: ladenie cez zápis do súboru.
+Pitfalls we hit (also recorded in the provisioning script):
+- bb passes `BB_SERVER_URL` pointing at the default server (personal bb, 38886) into automation scripts; the script sets it from `BB_SERVER_PORT`.
+- bb passes `BB_CLI` pointing at a launcher in `<data dir>/bin/bb`, which re-execs itself endlessly (hundreds of processes per second). The script must set `BB_CLI="$BB_CLI_DIR/bb"` and call it directly.
+- A script that ends on a timeout shows no output: debug by writing to a file.
 
-## 2. Konektory (publikovanie, metriky, neskôr komentáre)
+## 2. Connectors (publishing, metrics, later comments)
 
-**Jeden kontrakt pre všetky siete a zdroje.** Konektor je priečinok `packages/connectors/<name>/` s manifestom a tromi voliteľnými schopnosťami:
+**One contract for all networks and sources.** A connector is a folder `packages/connectors/<name>/` with a manifest and three optional capabilities:
 
 ```ts
 type Connector = {
   id: string;                         // "meta-instagram", "linkedin", "email-resend", "web-cms"
-  channels: string[];                 // ktoré `channel` hodnoty kalendára obslúži
-  auth: { kind: "oauth" | "apikey"; secrets: string[] };   // mená v bb secrets
+  channels: string[];                 // which calendar `channel` values it serves
+  auth: { kind: "oauth" | "apikey"; secrets: string[] };   // names in bb secrets
   publish?(entry: PublishInput): Promise<{ externalId: string; url?: string }>;
-  metrics?(range: { since: string; until: string }): AsyncIterable<MetricPoint>;   // bod 5
+  metrics?(range: { since: string; until: string }): AsyncIterable<MetricPoint>;   // item 5
   limits?: { postsPerDay?: number; maxTextLength?: number; mediaKinds?: string[] };
 };
 ```
 
-- `PublishInput` je neutrálny (text, assety s podpísanými URL, čas, trh). Prispôsobenie sieti (dĺžka, formát, hashtagy) robí konektor, nie agent.
-- Registrácia: jeden zoznam v `packages/connectors/index.ts`. Nová sieť = nový priečinok + riadok v zozname. Nič v kalendári, plugine ani UI sa nemení.
-- Poverenia: bb plugin **secrets** (agent hodnoty nikdy nevidí). V kóde len mená.
-- Kanál bez konektora sa dá naplánovať, ale nepublikuje sa automaticky: záznam skončí v stave `needs_manual` s textom a assetmi v inboxe (Calendar). Tak funguje aj Postiz alebo ručné nahratie na začiatku.
-- **Hotové: `telegram`** (kanál `telegram`: text, obrázok alebo video; jeden `TELEGRAM_BOT_TOKEN` v `.env`, a **kampaň určuje kam**: `bb brandwise campaign channel set telegram chatId=@kanál` pre kanál, skupinu alebo používateľa; cieľ zdedí kampaň od nadradenej, vlastný ho prebije; bez cieľa záznam čaká ako „Publish by hand“ s návodom) a `mock`. Telegram nemá idempotency key, takže pád medzi odoslaním a zápisom môže príspevok zdvojiť (poznámka v kóde). Ďalšie kanály podľa výsledku výskumu a klienta.
-- **Hotové (bez živého testu): `email` cez Resend**, pozri `email.md`: konektor, adaptér, webhook, štatistiky (`email stats`), výmena providera.
-- Pôvodný nápad na prvý konektor: **Postiz** (jeho API; AGPL, preto len cez API, nie fork) alebo priamo e-mail. Rozhodnutie závisí od prvého kanála klienta.
-- Testovací konektor `mock` (zapíše do logu) je súčasť bodu 1.
+- `PublishInput` is neutral (text, assets with signed URLs, time, market). Adapting to the network (length, format, hashtags) is done by the connector, not the agent.
+- Registration: one list in `packages/connectors/index.ts`. New network = new folder + one line in the list. Nothing in the calendar, plugin or UI changes.
+- Credentials: bb plugin **secrets** (the agent never sees the values). Only names in code.
+- A channel without a connector can be scheduled but is not published automatically: the entry ends in state `needs_manual` with the text and assets in the inbox (Calendar). This is also how Postiz or manual upload works at the start.
+- **Done: `telegram`** (channel `telegram`: text, image or video; a single `TELEGRAM_BOT_TOKEN` in `.env`, and **the campaign decides where**: `bb brandwise campaign channel set telegram chatId=@channel` for a channel, group or user; the campaign inherits the target from its parent, its own overrides it; without a target the entry waits as "Publish by hand" with instructions) and `mock`. Telegram has no idempotency key, so a crash between sending and writing the record can duplicate a post (note in the code). More channels depending on the research result and the client.
+- **Done (without a live test): `email` via Resend**, see `email.md`: connector, adapter, webhook, statistics (`email stats`), provider swap.
+- Original idea for the first connector: **Postiz** (its API; AGPL, so only via the API, not a fork) or e-mail directly. The decision depends on the client's first channel.
+- The test connector `mock` (writes to the log) is part of item 1.
 
-Hotovo, keď: dva rôzne konektory (mock + jeden reálny) publikujú z toho istého kalendára bez zmeny `run-due`.
+Done when: two different connectors (mock + one real) publish from the same calendar without changing `run-due`.
 
-## 3. Limity a spotreba (nahrádza „policy gate“)
+## 3. Limits and usage (replaces the "policy gate")
 
-Súhlasím: samostatný „policy engine“ netreba. Rozdelenie:
+Agreed: a separate "policy engine" is not needed. Split:
 
-| Čo | Kde | Poznámka |
+| What | Where | Note |
 |---|---|---|
-| Limity na deň, kanál, kredity, rozpočet, tiché hodiny | **tabuľka `limit` + `usage` záznamy** | rovnaký princíp ako dnešné limity pre Higgsfield (limit na volanie a na deň) |
-| Schvaľovacia úroveň 1 až 3 | kalendár (už je) | |
-| Kontrola tvrdení | claims lint (bod 4) | je to kontrola obsahu, nie spotreby |
+| Limits per day, channel, credits, budget, quiet hours | **`limit` table + `usage` records** | same principle as today's limits for Higgsfield (limit per call and per day) |
+| Approval tier 1 to 3 | calendar (already there) | |
+| Claim checking | claims lint (item 4) | it is a content check, not a usage check |
 
-- `limit(scope, key, period, max)`: napr. `("channel","instagram","day",2)`, `("credits","higgsfield","day",40)`, `("quiet_hours","SK","", "22:00-07:00")`.
-- `usage(scope, key, amount, at, entry_id?)`: zapisuje sa pri každom odpálení a generovaní. Jedna funkcia `canSpend(scope, key, amount)` ju číta; `run-due` ju volá pred publikovaním.
-- Nastavenia limitov sú v stránke Settings pluginu a v `profile.env` (ako teraz). Prekročenie = záznam sa posunie na ďalšie okno alebo ide do inboxu, nikdy sa nezahodí.
+- `limit(scope, key, period, max)`: e.g. `("channel","instagram","day",2)`, `("credits","higgsfield","day",40)`, `("quiet_hours","SK","", "22:00-07:00")`.
+- `usage(scope, key, amount, at, entry_id?)`: written on every fire and generation. A single function `canSpend(scope, key, amount)` reads it; `run-due` calls it before publishing.
+- Limit settings are in the plugin's Settings page and in `profile.env` (as now). Exceeding a limit = the entry is moved to the next window or goes to the inbox, it is never dropped.
 
-Hotovo, keď: 3. príspevok za deň na kanál s limitom 2 sa posunie na ďalší deň a v Calendar je vidno prečo.
+Done when: the 3rd post of a day on a channel with a limit of 2 moves to the next day and Calendar shows why.
 
-## 4. Produkt: sprievodca a MD balík
+## 4. Product: wizard and MD bundle
 
-Súhlasím so sprievodcom cez bb (nástroj na kladenie otázok), potom klasické vlákno.
+Agreed on the wizard via bb (a question-asking tool), then a regular thread.
 
-1. **Balík** je priečinok `~/.bb-brandwise/product/<id základnej kampane>/` s `product.md`, `audience.md`, `claims.md`, `constraints.md`, `voice.md` a podpriečinkom `derived/` (positioning, kľúčové slová, posolstvá). Čítanie a zápis cez `bb brandwise product get|set <súbor>`. Bez nového úložiska.
-2. **Sprievodca** je skill `product-onboarding`: vlákno kladie otázky nástrojom na otázky (jedna téma na obrazovku: čo predávame, komu, čím sa líšime, čo môžeme a nemôžeme tvrdiť, tón, trhy a jazyky, zakázané témy), po odpovediach napíše súbory cez `product set`.
-3. Potom **kompilácia**: ďalšie vlákno (rola „stratég“, bod 7) prečíta balík a vyrobí `derived/`. Človek schváli.
-4. Na stránke Campaigns pribudne tlačidlo „Spustiť sprievodcu“ (otvorí vlákno so skillom) a zoznam súborov balíka s úpravou v texte.
-5. Nástroje na čítanie: `product get` (celý balík alebo súbor), `claims get` (štruktúrovane: tvrdenie, zdroj, platnosť, trh).
+1. The **bundle** is a folder `~/.bb-brandwise/product/<always-on base campaign id>/` with `product.md`, `audience.md`, `claims.md`, `constraints.md`, `voice.md` and a `derived/` subfolder (positioning, keywords, messages). Read and write via `bb brandwise product get|set <file>`. No new storage.
+2. The **wizard** is the skill `product-onboarding`: the thread asks questions with a question tool (one topic per screen: what we sell, to whom, how we differ, what we can and cannot claim, tone, markets and languages, forbidden topics), and after the answers writes the files via `product set`.
+3. Then **compilation**: another thread (role "strategist", item 7) reads the bundle and produces `derived/`. A human approves.
+4. The Campaigns page gets a "Start wizard" button (opens a thread with the skill) and a list of the bundle's files with in-text editing.
+5. Read tools: `product get` (the whole bundle or one file), `claims get` (structured: claim, source, validity, market).
 
-`claims.md` má pevnú štruktúru (pole `claim`, `source`, `valid_until`, `markets`), aby sa dal použiť v bode 5. Presný formát sa určí s prvým klientom.
+`claims.md` has a fixed structure (field `claim`, `source`, `valid_until`, `markets`) so that it can be used in item 5. The exact format will be decided with the first client.
 
-Hotovo, keď: nový klient prejde sprievodcom do 15 minút a agent napíše koncept príspevku len z balíka.
+Done when: a new client goes through the wizard in 15 minutes and the agent writes a draft post from the bundle alone.
 
 ## 5. Claims lint
 
-Deterministická kontrola (bez LLM) textu záznamu proti `claims.md`: čísla, ceny, záruky, dotácie, superlatívy. Výsledok `green | list`, zobrazí sa na schvaľovacej karte; pre úroveň 3 povinný. `run-due` ho spustí znova tesne pred odpálením. Začína sa, keď existuje `claims.md` prvého klienta (backlog).
+A deterministic check (no LLM) of the entry's text against `claims.md`: numbers, prices, guarantees, subsidies, superlatives. The result is `green | list`, shown on the approval card; mandatory for tier 3. `run-due` runs it again right before firing. It starts once the first client's `claims.md` exists (backlog).
 
-## 6. Metriky a spätná väzba (flexibilné pre všetky siete a zdroje)
+## 6. Metrics and feedback (flexible for all networks and sources)
 
-Cieľ: pridať novú sieť alebo zdroj dát bez zmeny schémy.
+Goal: add a new network or data source without changing the schema.
 
-- **Jedna úzka tabuľka** `metric_point(source, entity, metric, value, at, dims jsonb)`:
-  - `source` = id konektora (`meta-instagram`, `ga4`, `shop`, `crm`),
-  - `entity` = čoho sa to týka (`calendar:<id>`, `campaign:<id>`, `ad:<id>`, `page:<url>`),
-  - `metric` z **pevného slovníka** (`impressions`, `reach`, `clicks`, `likes`, `comments`, `shares`, `saves`, `video_views`, `watch_time`, `followers`, `spend`, `conversions`, `revenue`, `orders`),
-  - `dims` pre rozmery (trh, kreatíva, variant experimentu), čo sa nehodí do slovníka.
-- **Zber:** každý konektor so schopnosťou `metrics()` má jeden bb automation script (denne, po publikovaní aj po 1 h, 24 h a 7 d cez `run-due`, ktorý pri `published` založí kontrolné záznamy). Skript volá `bb brandwise metrics pull <konektor>`; opakovanie je bezpečné (kľúč `source+entity+metric+at`).
-- **Surové eventy z webu, CRM a obchodu:** prijímač cez HTTP trasu pluginu s podpisom a zápisom do `metric_point` alebo do `event` (ďalšia úzka tabuľka); rovnaký slovník.
-- **Čítanie agentom:** len deterministické agregácie, nikdy surové riadky: `metrics summary --campaign <c> --since 7d --by channel|entry|variant`, `metrics compare <a> <b>`. Agent dostane čísla a signály („príspevok X mal 3× medián“), nie tabuľky.
-- **Experimenty:** `experiment(id, hypothesis, variants, holdout_pct, metric)` a stĺpce v kalendári (`experiment_id`, `variant`, `holdout`). Vyhodnotenie je deterministická funkcia nad `metric_point`; závery sa zapíšu ako poznatky (`learning`), ktoré agent číta cez `get_learnings`.
+- **One narrow table** `metric_point(source, entity, metric, value, at, dims jsonb)`:
+  - `source` = connector id (`meta-instagram`, `ga4`, `shop`, `crm`),
+  - `entity` = what it relates to (`calendar:<id>`, `campaign:<id>`, `ad:<id>`, `page:<url>`),
+  - `metric` from a **fixed vocabulary** (`impressions`, `reach`, `clicks`, `likes`, `comments`, `shares`, `saves`, `video_views`, `watch_time`, `followers`, `spend`, `conversions`, `revenue`, `orders`),
+  - `dims` for dimensions (market, creative, experiment variant) that do not fit the vocabulary.
+- **Collection:** every connector with a `metrics()` capability has one bb automation script (daily, plus after publishing at 1 h, 24 h and 7 d via `run-due`, which creates check entries on `published`). The script calls `bb brandwise metrics pull <connector>`; repeating it is safe (key `source+entity+metric+at`).
+- **Raw events from the web, CRM and shop:** a receiver via the plugin's HTTP route with a signature and writing to `metric_point` or to `event` (another narrow table); same vocabulary.
+- **Reading by the agent:** only deterministic aggregations, never raw rows: `metrics summary --campaign <c> --since 7d --by channel|entry|variant`, `metrics compare <a> <b>`. The agent gets numbers and signals ("post X had 3x the median"), not tables.
+- **Experiments:** `experiment(id, hypothesis, variants, holdout_pct, metric)` and columns in the calendar (`experiment_id`, `variant`, `holdout`). Evaluation is a deterministic function over `metric_point`; conclusions are written as findings (`learning`) that the agent reads via `get_learnings`.
 
-Hotovo, keď: po publikovaní testovacieho príspevku sa po hodine objavia jeho čísla v `metrics summary` a Calendar ukáže výkon pri zázname.
+Done when: after publishing a test post, its numbers appear in `metrics summary` after an hour and Calendar shows the performance next to the entry.
 
-## 7. Moderácia komentárov (čítanie cez automation)
+## 7. Comment moderation (reading via automation)
 
-Rozhodnuté: komentáre sa **čítajú periodicky** bb automation, nie cez webhook. Webhook (Meta ho má, TikTok, LinkedIn a YouTube pri organických komentároch pravdepodobne nie) sa dá neskôr pridať ako ping na ten istý príkaz; vyžaduje samostatný verejný prijímač, lebo bb inštanciu verejne vystaviť nesmieme.
+Decided: comments are **read periodically** by a bb automation, not via webhook. A webhook (Meta has one, TikTok, LinkedIn and YouTube probably do not for organic comments) can be added later as a ping to the same command; it requires a separate public receiver, because we must not expose the bb instance publicly.
 
-- Konektor dostane schopnosť `comments?(since)` a akcie `hide`, `delete`, `reply`.
-- Tabuľka `comment(source, external_id, entry_id, author, text, at, status)`, kľúč `source+external_id` robí zber opakovateľným. Stavy: `new`, `ok`, `hidden`, `needs_review`, `replied`.
-- Automation script každých pár minút volá `bb brandwise comments pull <konektor>`; bez nových komentárov nič nevypíše (tichý tik), inak spustí moderačného agenta (persona).
-- Deterministický predfilter (blokované slová, odkazy, opakovanie) rieši jasný spam bez LLM, agent posudzuje len nejasné.
-- Úrovne: skrytie jasného spamu = 1 (automaticky, s logom, vratné); zmazanie, blokovanie a odpoveď = 2 a idú cez kalendár. Agent odpoveď sám neodošle.
-- Push na `needs_review` a na hromadné skrytie.
-- Pred stavbou overiť v oficiálnej dokumentácii možnosti API pre TikTok a LinkedIn.
+- The connector gets a capability `comments?(since)` and actions `hide`, `delete`, `reply`.
+- Table `comment(source, external_id, entry_id, author, text, at, status)`, the key `source+external_id` makes collection repeatable. States: `new`, `ok`, `hidden`, `needs_review`, `replied`.
+- An automation script calls `bb brandwise comments pull <connector>` every few minutes; with no new comments it prints nothing (silent tick), otherwise it starts the moderation agent (persona).
+- A deterministic prefilter (blocked words, links, repetition) handles clear spam without an LLM, the agent judges only the unclear cases.
+- Tiers: hiding clear spam = 1 (automatic, logged, reversible); deleting, blocking and replying = 2 and go through the calendar. The agent never sends a reply itself.
+- Push on `needs_review` and on bulk hiding.
+- Before building, check the API options for TikTok and LinkedIn in the official documentation.
 
-Hotovo, keď: testovací komentár sa objaví do 5 minút a spam sa skryje bez zásahu.
+Done when: a test comment shows up within 5 minutes and spam is hidden without intervention.
 
-## 8. Výskumné nástroje (SEO, GEO, reklamy)
+## 8. Research tools (SEO, GEO, ads)
 
-Rovnaký vzor ako konektory: **poskytovateľ** je malý adaptér, nástroj je príkaz.
+Same pattern as connectors: the **provider** is a small adapter, the tool is a command.
 
-- Príkazy: `research keywords <dopyt>`, `research serp <dopyt>`, `research gsc --site <s> --since 28d`, `research ads <značka>` (Meta Ad Library), `research geo <dopyt>` (citácie v AI odpovediach), `media transcribe <súbor>` (Whisper).
-- Poskytovateľ (DataForSEO, Google Search Console, Meta) = `packages/research/<name>.ts` s jednou funkciou; zoznam v `index.ts`. Poverenia v bb secrets.
-- **Cache a cena:** tabuľka `research_cache(provider, key, payload, fetched_at, cost)` s platnosťou podľa nástroja (SERP 24 h, kľúčové slová 30 d). Každé platené volanie ide cez `usage` (bod 3), takže platia limity.
-- Výstup je vždy ohraničený (top N, zhrnutie), nie surový export.
+- Commands: `research keywords <query>`, `research serp <query>`, `research gsc --site <s> --since 28d`, `research ads <brand>` (Meta Ad Library), `research geo <query>` (citations in AI answers), `media transcribe <file>` (Whisper).
+- A provider (DataForSEO, Google Search Console, Meta) = `packages/research/<name>.ts` with one function; the list is in `index.ts`. Credentials in bb secrets.
+- **Cache and cost:** table `research_cache(provider, key, payload, fetched_at, cost)` with validity per tool (SERP 24 h, keywords 30 d). Every paid call goes through `usage` (item 3), so the limits apply.
+- The output is always bounded (top N, summary), not a raw export.
 
-Hotovo, keď: `research keywords` vráti výsledok, druhé rovnaké volanie ide z cache a v `usage` je vidno cenu.
+Done when: `research keywords` returns a result, the second identical call is served from the cache and the cost is visible in `usage`.
 
-## 9. Roly a upozornenia
+## 9. Roles and notifications
 
-**Roly = persony** (systémový prompt + zoznam príkazov, ktoré smie používať): `researcher`, `writer`, `seo`, `ads`, `analyst`, `critic`, `strategist`. Každá je súbor `roles/<name>.md` v plugine. Spúšťa sa ako vlákno s tým promptom (z „Start agent“, z iného vlákna alebo z automation). Súhlasím, že to stačí.
+**Roles = personas** (a system prompt + a list of commands they may use): `researcher`, `writer`, `seo`, `ads`, `analyst`, `critic`, `strategist`. Each is a file `roles/<name>.md` in the plugin. It runs as a thread with that prompt (from "Start agent", from another thread or from an automation). Agreed that this is enough.
 
-Čestné obmedzenie: persona **nevynúti** zákaz nástrojov, je to len inštrukcia. Skutočné ochrany ostávajú v kóde: agent nemôže schváliť (len človek), nič nejde von mimo kalendára, limity a claims lint beží v `run-due`. Rola preto zjednodušuje prácu, nie bezpečnosť.
+An honest limitation: a persona **does not enforce** a ban on tools, it is only an instruction. The real protections stay in code: the agent cannot approve (only a human can), nothing goes out outside the calendar, limits and the claims lint run in `run-due`. A role therefore simplifies work, not security.
 
-**Upozornenia (to, čo som volal inbox a digest):** majiteľ nesmie musieť sledovať aplikáciu. V bb to znamená:
-- **Inbox = stránka Calendar** (už existuje): záznamy na schválenie, zlyhané publikácie, `needs_manual`.
-- **Kontrola cez bb automation** (nie push z pluginu): malá script automation každých pár minút spustí `bb brandwise inbox` (záznamy čakajúce na schválenie, `failed`, `needs_manual`). Ak nič nie je nové, nevypíše nič (tichý tik). Ak je, pošle upozornenie cez bb push notifications (mobil aj desktop). Stav „už upozornené“ si drží príkaz v Postgrese, aby sa neopakovalo. Plugin tak nemusí nič posielať pri zmene stavu a všetko je vidieť v histórii behov automation.
-- **Týždenný digest:** jedna bb automation v pondelok ráno (režim agent), ktorá vyrobí vlákno „Týždeň: čo prebehlo, čo čaká, čo sa naučilo“ a pošle push s odkazom. Žiadny WhatsApp ani e-mail na začiatku; pridať sa dá ako ďalší konektor.
+**Notifications (what I called inbox and digest):** the owner must not have to watch the app. In bb this means:
+- **Inbox = the Calendar page** (already exists): entries awaiting approval, failed publications, `needs_manual`.
+- **Check via a bb automation** (not a push from the plugin): a small script automation every few minutes runs `bb brandwise inbox` (entries awaiting approval, `failed`, `needs_manual`). If nothing is new, it prints nothing (silent tick). If there is, it sends a notification via bb push notifications (mobile and desktop). The "already notified" state is kept by the command in Postgres so it does not repeat. The plugin thus does not have to send anything on a state change, and everything is visible in the automation's run history.
+- **Weekly digest:** one bb automation on Monday morning (agent mode) that produces a thread "Week: what happened, what is waiting, what we learned" and sends a push with a link. No WhatsApp or e-mail at the start; they can be added as another connector.
 
-## Čo sme zrušili oproti pôvodnému návrhu
+## What we dropped from the original design
 
-- **Vercel AI SDK, DBOS, Inngest, A2A:** preč. Agent je bb vlákno, trvanlivosť je stav v Postgrese plus bb automations.
-- **Tabuľky `tool` a `tool_call`:** preč. Každé volanie nástroja je už v logu bb vlákna, druhý záznam by bol duplicita. Ostáva len prepojenie záznamu kalendára na vlákno, ktoré ho vytvorilo (`thread_id`, `rationale`) a tabuľka `usage` (bod 3), ktorú potrebujeme na limity.
-- **`propose_tool` a schvaľovanie nových nástrojov:** nový nástroj je zmena v kóde pluginu cez bežný PR.
-- **Samostatný policy engine:** nahradený limitmi, claims lintom a schvaľovacou úrovňou.
-- **Test výberu nástrojov (50 úloh):** zostáva ako voliteľná kontrola kvality po bode 8, nie ako podmienka.
+- **Vercel AI SDK, DBOS, Inngest, A2A:** gone. The agent is a bb thread, durability is state in Postgres plus bb automations.
+- **Tables `tool` and `tool_call`:** gone. Every tool call is already in the bb thread's log, a second record would be a duplicate. What remains is only the link from a calendar entry to the thread that created it (`thread_id`, `rationale`) and the `usage` table (item 3), which we need for limits.
+- **`propose_tool` and approval of new tools:** a new tool is a change in the plugin's code via a regular PR.
+- **A separate policy engine:** replaced by limits, the claims lint and the approval tier.
+- **Tool selection test (50 tasks):** stays as an optional quality check after item 8, not as a requirement.

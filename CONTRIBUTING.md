@@ -37,7 +37,7 @@ cd ../../apps/bb-plugin-brandwise && npm install && npx tsc --noEmit
 - Run `npx tsc --noEmit` in the plugin and `npm test` in `packages/core` before you push; CI runs both.
 - Use conventional commit messages (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`), in English. Pull request descriptions are in English too.
 - Never commit secrets, `.env` files, customer data or generated creatives. Do not commit real brand assets of a client.
-- Docs under `docs/` are currently Slovak; English translations are welcome.
+- **Everything committed is in English**: Markdown files (docs, skills, README), commit messages, issues and pull requests, and the prompts and strings in code. `npm run check:english` (also run by CI) fails when a Markdown file contains Slovak or Czech letters. Agents answer users in the user's language, but what they write into the repository is English.
 
 ## Reviews
 

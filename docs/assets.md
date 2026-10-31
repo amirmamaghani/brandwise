@@ -1,33 +1,33 @@
-# Kampane a assety
+# Campaigns and assets
 
-Rozhodnuté 2026-10-29: obsah delíme podľa **kampane** (`campaign_id`), nie podľa firmy, a súbory žijú v **S3 úložisku**. Metadáta sú v Postgrese.
+Decided 2026-10-29: content is divided by **campaign** (`campaign_id`), not by company, and files live in **S3 storage**. Metadata is in Postgres.
 
-## Kampaň
+## Campaign
 
-Kampaň je jednotka, ku ktorej patrí obsah. Kreatívy sa v jednotlivých obdobiach líšia, preto sa nesmú miešať s trvalými. Slovo „projekt" nepoužívame, lebo v BB je projekt repozitár.
+A campaign is the unit that content belongs to. Creatives differ between periods, so they must not be mixed with permanent ones. We do not use the word "project", because in BB a project is a repository.
 
 ```sql
 create table campaign (
   id         uuid primary key default gen_random_uuid(),
-  parent_id  uuid references campaign(id),  -- trvalý základ -> kampaň
-  root_id    uuid not null,                 -- koreň stromu, na ňom stojí RLS (izolácia zákazníkov)
+  parent_id  uuid references campaign(id),  -- always-on base -> campaign
+  root_id    uuid not null,                 -- root of the tree, RLS is based on it (customer isolation)
   name       text not null,
   kind       text not null check (kind in ('always_on','campaign')),
-  starts_at  date,                          -- obdobie kampane (null = trvalé)
+  starts_at  date,                          -- campaign period (null = permanent)
   ends_at    date,
   status     text not null default 'active'
 );
 ```
 
-- **`always_on`** je trvalý základ značky alebo produktu bez konca (v marketingu „always-on"). Drží logo, pravidlá značky a trvalé assety, napríklad „Acme".
-- **`campaign`** je obdobie s dátumami pod základom, napríklad „Q4 launch".
-- Dieťa dedí z rodiča `brand/` (tokeny, hlas, pravidlá) a môže ich prepísať. Kampaň teda mení len to, čo sa v nej líši.
-- Izolácia medzi zákazníkmi je `root_id`. Kto smie čítať, určuje koreň, nie jednotlivá kampaň.
-- Z BB nepreberáme žiadne pojmy: nepoužívame „project", „workspace", „environment" ani „thread" a premenné nášho provisioningu majú predponu `BW_`, nie `BB_`.
+- **`always_on`** is the permanent base of a brand or product with no end (in marketing "always-on"). It holds the logo, brand rules and permanent assets, for example "Acme".
+- **`campaign`** is a period with dates under a base, for example "Q4 launch".
+- A child inherits `brand/` (tokens, voice, rules) from its parent and can override them. So a campaign changes only what differs in it.
+- Isolation between customers is `root_id`. Who may read is determined by the root, not by the individual campaign.
+- We take no terms from BB: we do not use "project", "workspace", "environment" or "thread", and the variables of our provisioning have the prefix `BW_`, not `BB_`.
 
 ## Asset
 
-Jedna tabuľka pre všetky súbory, nezáleží, či ho vyrobil systém (Satori, Higgsfield) alebo ho nahral človek.
+One table for all files, regardless of whether it was produced by the system (Satori, Higgsfield) or uploaded by a human.
 
 ```sql
 create table asset (
@@ -42,11 +42,11 @@ create table asset (
   bytes         bigint not null,
   width int, height int, duration_ms int,
   status        text not null default 'draft',  -- draft | linted | approved | published | archived
-  ai_generated  boolean not null default false, -- označovanie podľa AI Act čl. 50
-  rights        jsonb,           -- kto ma práva a na čo súbor smieme použiť (fotky zákazníkov!)
-  provenance    jsonb,           -- generated: model, prompt, ID úlohy, cena, šablóna + verzia, tokeny, polia, lint
-                                 -- uploaded: kto, kedy, odkiaľ
-  created_by    text not null,   -- user alebo run agenta
+  ai_generated  boolean not null default false, -- labeling under AI Act art. 50
+  rights        jsonb,           -- who holds the rights and what we may use the file for (customer photos!)
+  provenance    jsonb,           -- generated: model, prompt, job ID, cost, template + version, tokens, fields, lint
+                                 -- uploaded: who, when, from where
+  created_by    text not null,   -- user or agent run
   created_at    timestamptz not null default now(),
   unique (campaign_id, sha256)
 );
@@ -59,38 +59,38 @@ create table asset_link (
 );
 ```
 
-`content_calendar.asset_id` nahrádza názov súboru. `provenance` je JSON, kým nepotrebujeme dotazy (napríklad cena podľa modelu), potom sa rozbije na stĺpce.
+`content_calendar.asset_id` replaces the file name. `provenance` is JSON until we need queries (for example cost by model), then it is split into columns.
 
-## Úložisko
+## Storage
 
-Kód používa len S3 API, prepnutie z lokálu na produkciu sú premenné prostredia (`.env.example`):
+The code uses only the S3 API, switching from local to production is environment variables (`.env.example`):
 
-| | Lokálne | Produkcia |
+| | Local | Production |
 |---|---|---|
-| `S3_ENDPOINT` | `http://localhost:9010` | R2: `https://<account>.r2.cloudflarestorage.com`; AWS S3: nenastavovať |
-| `S3_REGION` | `us-east-1` | R2: `auto`; S3: skutočný región |
+| `S3_ENDPOINT` | `http://localhost:9010` | R2: `https://<account>.r2.cloudflarestorage.com`; AWS S3: leave unset |
+| `S3_REGION` | `us-east-1` | R2: `auto`; S3: actual region |
 | `S3_BUCKET` | `marketing-ai-assets` | `brandwise-assets-prod` |
 | `S3_FORCE_PATH_STYLE` | `true` | `false` |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | z `infra/docker-compose.yml` | z poskytovateľa |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | from `infra/docker-compose.yml` | from the provider |
 
-- **Kľúč** je `c/<campaign_id>/<sha256>.<ext>`. Súbor sa neprepisuje a duplicity sa zlúčia.
-- **Bucket je súkromný.** UI a agenti dostanú podpísaný odkaz s platnosťou niekoľko minút (`get_asset`). Anonymný prístup nefunguje.
-- **Nahrávanie** (`save_asset`): spočítať hash, nahrať, ak ešte nie je, zapísať riadok. Pri nahraných fotkách odstrániť EXIF (poloha) a overiť typ a veľkosť.
+- **Key** is `c/<campaign_id>/<sha256>.<ext>`. A file is never overwritten and duplicates are merged.
+- **The bucket is private.** The UI and agents get a signed link valid for a few minutes (`get_asset`). Anonymous access does not work.
+- **Upload** (`save_asset`): compute the hash, upload if not there yet, write the row. For uploaded photos strip EXIF (location) and verify type and size.
 
-### Lokálny emulátor
+### Local emulator
 
-Oficiálne obrazy MinIO sa 2026-10-29 nedali stiahnuť z Docker Hubu ani z quay.io (`pull access denied`). Lokálne preto beží **RustFS** (S3 kompatibilný, rovnaké premenné `MINIO_ROOT_*` aj `RUSTFS_*`). Overené na tomto stacku:
+The official MinIO images could not be pulled on 2026-10-29 from Docker Hub or quay.io (`pull access denied`). So **RustFS** runs locally (S3 compatible, same `MINIO_ROOT_*` and `RUSTFS_*` variables). Verified on this stack:
 
-- vytvorenie súkromného bucketu a nahratie objektu pod kľúčom podľa hashu,
-- podpísaný odkaz (platnosť 60 s) vrátil 200 a celý súbor (499 493 B),
-- anonymný prístup 403, pozmenený podpis 400.
+- creating a private bucket and uploading an object under a hash-based key,
+- a signed link (valid for 60 s) returned 200 and the whole file (499 493 B),
+- anonymous access 403, tampered signature 400.
 
-Alternatívy, ktoré sa stiahli: SeaweedFS a Garage. Meniť lokálny emulátor je lacné, aplikácia vidí len S3.
+Alternatives that did pull: SeaweedFS and Garage. Changing the local emulator is cheap, the application sees only S3.
 
-## Otvorené
+## Open
 
-- Stabilita a licencia RustFS (z pamäte je to mladý projekt, preto len na lokálny vývoj, nie na produkciu). Neoverené.
-- Voľba produkcie: R2, S3 alebo B2 (cena a poloha dát pre EÚ).
-- Prekrývanie kampaní v jednom produkte: ktorá kampaň platí pri sporných obdobiach.
-- Priame nahrávanie z prehliadača (potrebuje CORS na bucket) vs. cez server.
-- Lifecycle: ako dlho držať nepoužité drafty a surové výstupy z Higgsfieldu.
+- Stability and license of RustFS (from memory it is a young project, so for local development only, not production). Unverified.
+- Production choice: R2, S3 or B2 (price and data location for the EU).
+- Overlapping campaigns in one product: which campaign applies in disputed periods.
+- Direct upload from the browser (needs CORS on the bucket) vs. through the server.
+- Lifecycle: how long to keep unused drafts and raw Higgsfield outputs.

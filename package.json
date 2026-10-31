@@ -17,7 +17,8 @@
     "bootstrap": "tools/bootstrap.sh",
     "dl": "tools/video-dl.sh",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d --wait",
-    "infra:down": "docker compose -f infra/docker-compose.yml down"
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "check:english": "tools/check-english.sh"
   },
   "devDependencies": {
     "turbo": "^2"

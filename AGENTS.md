@@ -1,5 +1,7 @@
 # brandwise
 
+**Language rule:** everything you write into this repository is in English: Markdown files (docs, skills, README), code comments, strings and prompts, commit messages, issue and PR text. Answer the user in the language they write in, but never commit non-English text. `tools/check-english.sh` enforces it for Markdown.
+
 Turborepo monorepo (pnpm). CLI scripts and tools for marketing.
 
 ## Tools (`tools/`)
