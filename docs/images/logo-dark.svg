@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 -8 507 405" role="img" aria-labelledby="t"><title id="t">BrandWise</title><defs>
+<linearGradient id="g" x1="40" y1="20" x2="460" y2="380" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffffff"/><stop offset="0.35" stop-color="#e6e6e6"/><stop offset="0.7" stop-color="#bdbdbd"/><stop offset="1" stop-color="#8f8f8f"/></linearGradient>
+</defs>
+<g id="b" fill="url(#g)" stroke="url(#g)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+<path d="M82 40 L47 228" fill="none"/><path d="M118 160 C60 160 12 206 12 264 C12 322 56 366 112 366 C170 366 222 320 222 262 C222 204 176 160 118 160Z M116 214 C148 214 168 238 168 264 C168 292 146 312 114 312 C84 312 66 290 66 262 C66 236 86 214 116 214Z" fill-rule="evenodd" stroke="none"/></g>
+<g id="w-edge" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"><path d="M222 128 L262 318 L330 190 L398 318 L470 128"/></g>
+<g id="w" fill="none" stroke="url(#g)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"><path d="M222 128 L262 318 L330 190 L398 318 L470 128"/></g></svg>

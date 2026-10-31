@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+    <img src="docs/images/logo.svg" alt="BrandWise" width="120">
+  </picture>
+</p>
+
 # BrandWise
 
 An open-source, agent-driven marketing system that runs on [bb](https://getbb.app). AI agents plan, write and prepare campaigns; **nothing leaves the system without passing the calendar and a human approval**.
