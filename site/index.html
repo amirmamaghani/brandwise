@@ -34,10 +34,10 @@
     <p class="sub">Agents draft the posts, e-mails and creatives. A calendar with human approval is the only way anything leaves, and results come back as numbers they can learn from.</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/amirmamaghani/brandwise">View on GitHub</a>
-      <a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#quick-start-local">Quick start</a>
+      <a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#installation">Quick start</a>
     </div>
     <div class="install">
-      <button class="cmd" id="copy" type="button" aria-label="Copy command"><span class="d">$</span><span class="t">git clone https://github.com/amirmamaghani/brandwise</span><span class="c">Copy</span></button>
+      <button class="cmd" id="copy" type="button" aria-label="Copy command"><span class="d">$</span><span class="t">npx create-brandwise</span><span class="c">Copy</span></button>
       <span class="note">Free, open source, MIT licensed. Early: it works end to end, with rough edges.</span>
     </div>
   </header>
@@ -100,6 +100,7 @@
       <div>
         <h2>Agents propose. Code decides.</h2>
         <p>Every page has an agent that knows which campaign and project you are looking at. It drafts, generates creatives, edits video and reads the results, using the same commands you can run yourself.</p>
+        <p>For e-mail an editor agent closes the loop: it reads the numbers, runs one A/B test at a time and briefs author agents. Code judges the result (sample size, significance, complaint guards); only you set the goals.</p>
         <p>API keys stay in settings and are never shown to it. Failed sends retry, then surface in the calendar with the reason.</p>
       </div>
     </div>
@@ -124,7 +125,7 @@
 
   <section class="band">
     <h2>Fully yours.</h2>
-    <p>BrandWise runs on your machine with a local Postgres and any S3-compatible storage. Campaigns, calendar, creatives and statistics stay with you.</p>
+    <p>One command, <code>npx create-brandwise</code>, installs it on your machine with a local or your own Postgres and any S3-compatible storage. Campaigns, calendar, creatives and statistics stay with you.</p>
     <p>It is MIT licensed. Add a channel with one small connector, an e-mail provider with one adapter file, and make the rest your own.</p>
   </section>
 
@@ -137,13 +138,13 @@
   <footer class="footer">
     <picture class="footer-mark"><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="BrandWise" width="30"></picture>
     <div><div class="ft">Project</div><ul><li><a href="https://github.com/amirmamaghani/brandwise">Source</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md">README</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/roadmap.md">Roadmap</a></li></ul></div>
-    <div><div class="ft">Docs</div><ul><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/architecture.md">Architecture</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email.md">E-mail</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/assets.md">Assets</a></li></ul></div>
+    <div><div class="ft">Docs</div><ul><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/architecture.md">Architecture</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email.md">E-mail</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/editor.md">Editor loop</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/assets.md">Assets</a></li></ul></div>
     <div><div class="ft">Community</div><ul><li><a href="https://github.com/amirmamaghani/brandwise/issues">Issues</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">Contributing</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/SECURITY.md">Security</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li></ul></div>
     <div class="pub-line">&copy; 2026 Amir Mamaghani. MIT licensed. Remotion, used by the optional video engine, has its own licence. Marketing e-mail needs recipient consent and a working unsubscribe, and AI-written claims in regulated areas must be reviewed by a human.</div>
   </footer>
 </div>
 <script>
-document.getElementById("copy").addEventListener("click",function(){var b=this;navigator.clipboard.writeText("git clone https://github.com/amirmamaghani/brandwise").then(function(){var c=b.querySelector(".c");b.classList.add("copied");c.textContent="Copied";setTimeout(function(){b.classList.remove("copied");c.textContent="Copy"},1600)})});
+document.getElementById("copy").addEventListener("click",function(){var b=this;navigator.clipboard.writeText("npx create-brandwise").then(function(){var c=b.querySelector(".c");b.classList.add("copied");c.textContent="Copied";setTimeout(function(){b.classList.remove("copied");c.textContent="Copy"},1600)})});
 </script>
 </body>
 </html>
