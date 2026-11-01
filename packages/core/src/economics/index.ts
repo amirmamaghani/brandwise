@@ -90,9 +90,10 @@ export function createEconomics(deps: { core: Core; now: () => Promise<Date>; /*
     },
     /** Units of a provider spent today under a scope (a campaign and everything under it; null = everything): what daily budgets read. */
     async spentToday(provider: string, scope: string | null): Promise<number> {
-      const day = (await deps.now()).toISOString().slice(0, 10);
-      const ids = scope === null ? (await core.campaigns.list()).map((c) => c.id) : (await family(scope)).tree.map((c) => c.id);
-      const r = (await store.q("select coalesce(sum(units), 0) as n from cost_entry where kind = 'gen' and source = $1 and campaign_id = any($2::uuid[]) and at >= $3::date and at < $3::date + 1", [provider, ids, day]))[0];
+      // the UTC day as explicit instants: a date compared with timestamptz would follow the database session's time zone
+      const start = new Date(`${(await deps.now()).toISOString().slice(0, 10)}T00:00:00.000Z`), end = new Date(start.getTime() + DAY);
+      const ids = scope === null ? null : (await family(scope)).tree.map((c) => c.id);
+      const r = (await store.q("select coalesce(sum(units), 0) as n from cost_entry where kind = 'gen' and source = $1 and ($2::uuid[] is null or campaign_id = any($2::uuid[])) and at >= $3 and at < $4", [provider, ids, start.toISOString(), end.toISOString()]))[0];
       return Number(r.n);
     },
     /** A cost a person states: media spend, an incentive, a tool, sales cost (for CAC). Idempotent per reference. */

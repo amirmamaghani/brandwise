@@ -4,7 +4,7 @@
 -- here: reports read them from entry_event and email_event.
 create table cost_entry (
   id           bigserial primary key,
-  campaign_id  uuid not null references campaign(id) on delete cascade,
+  campaign_id  uuid not null references campaign(id),   -- no cascade: spend must not vanish from a budget with a deleted campaign
   entry_id     text references content_calendar(id) on delete set null,
   asset_id     uuid references asset(id) on delete set null,
   kind         text not null check (kind in ('media', 'gen', 'llm', 'incentive', 'tool', 'sales')),
