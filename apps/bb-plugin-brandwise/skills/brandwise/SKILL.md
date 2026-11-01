@@ -60,7 +60,7 @@ When you add the entry, pass `--brief-id <id> --applies <learning ids>` and, in 
 | `bb brandwise learnings add "<observation>" [--lever "attribute: from -> to"] [--campaign <c>]` | Note an observation as E3 (a candidate to test). E1 and E2 are written by code only. |
 | `bb brandwise learnings propose-preference "<rule>" --from-entries <ids>` | Propose a rule drawn from a person's send-backs of those entries; it is in force once the person confirms it. |
 
-A single send is not evidence: never cite the result of one entry as a reason. `learnings confirm|retire`, goals, budgets and approvals are the user's.
+A single send is not evidence: never cite the result of one entry as a reason. Confirming or retiring a learning (Results page only), goals, budgets and approvals are the user's.
 
 ## Assets
 

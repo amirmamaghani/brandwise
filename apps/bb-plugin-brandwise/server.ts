@@ -765,12 +765,23 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  /**
+   * Who did it, as recorded in the entry's history: always "cli" or "cli:<label>" from the CLI. `--as` is a label agents give
+   * themselves, not an identity, so it can never claim a reserved actor ("ui" is a person on a page, "auto" and "scheduler" are code).
+   */
+  const RESERVED_ACTORS = new Set(["ui", "auto", "scheduler", "regulator", "miner", "promotion"]);
+  const cliActor = (args: string[]) => {
+    const label = val(args, "--as")?.trim();
+    if (!label) return "cli";
+    if (RESERVED_ACTORS.has(label.toLowerCase())) throw new Error(`--as ${label} is reserved: it names a person on a page or the system`);
+    return `cli:${label.slice(0, 40)}`;
+  };
   /** `--brief-id`, `--applies`, `--tests`, `--tag` of calendar add/edit: what the entry was written from (learnings). */
   async function attachFromArgs(entryId: string, args: string[]) {
     const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
     const input = { briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") };
     if (!learnings || Object.values(input).every((v) => v === undefined)) return null;
-    return learnings.attach(entryId, { ...input, tagSource: val(args, "--as") === "ui" ? "human" : "agent" });
+    return learnings.attach(entryId, { ...input, tagSource: "agent" });
   }
 
   const usage = [
@@ -787,7 +798,6 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
     "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
     "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
-    "  bb brandwise learnings confirm|retire <id>   (a person's commands)",
     "  bb brandwise learnings mine [--campaign <c>]   (E2 patterns over matured entries; run weekly by a bb automation, silent when nothing is new)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
@@ -1114,7 +1124,7 @@ export default async function plugin(bb: BbPluginApi) {
           const at = val(args, "--at");
           const tier = Number(val(args, "--tier"));
           if (!title || !channel || !at || ![1, 2, 3].includes(tier)) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: val(args, "--as") ?? "cli" });
+          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: cliActor(args) });
           const linked = await attachFromArgs(e.id, args);
           await changed();
           return reply({ ...e, learnings: linked }, `Added ${fmtEntry(e)}${linked ? `\nwritten from brief ${linked.briefId ?? "none"}; applies ${linked.applies.join(", ") || "nothing"}; tests ${linked.tests.join(", ") || "nothing"}` : "\nNo --brief-id: run `bb brandwise brief` before writing and cite what you apply (the reviewer sees it)."}`);
@@ -1126,7 +1136,7 @@ export default async function plugin(bb: BbPluginApi) {
           const e = await c.calendar.update(id, {
             title: val(args, "--title"), body: val(args, "--body"), link: val(args, "--link"), channel: val(args, "--channel"),
             scheduledAt: at, assetId: val(args, "--asset"),
-          }, val(args, "--as") ?? "cli");
+          }, cliActor(args));
           await attachFromArgs(e.id, args);
           await changed();
           return reply(e, fmtEntry(e));
@@ -1134,21 +1144,21 @@ export default async function plugin(bb: BbPluginApi) {
         if (area === "calendar" && action === "unapprove") {
           const id = positional(args.slice(2))[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.unapprove(id, val(args, "--as") ?? "cli");
+          const e = await c.calendar.unapprove(id, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "request-changes") {
           const [id, ...note] = positional(args.slice(2));
           if (!id || note.length === 0) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.requestChanges(id, note.join(" "), { actor: val(args, "--as") ?? "cli", reason: val(args, "--reason") ?? null });
+          const e = await c.calendar.requestChanges(id, note.join(" "), { actor: cliActor(args), reason: val(args, "--reason") ?? null });
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && (action === "approve" || action === "cancel")) {
           const id = rest[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.decide(id, action, val(args, "--as") ?? "cli");
+          const e = await c.calendar.decide(id, action, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }

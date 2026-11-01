@@ -58,7 +58,9 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     if (!reg) return { exitCode: 1, stderr: "The regulator needs the database and the e-mail module: run infra/bb-instance/provision.sh apply" };
     const { val, positional, reply, usage } = io;
     const rest = positional(args.slice(2));
-    const who = val(args, "--as") ?? "agent";
+    const who = val(args, "--as")?.trim() || "agent";
+    // a label agents give themselves, never a reserved actor: "ui" is a person on a page, the others are code
+    if (["ui", "auto", "scheduler", "regulator", "miner", "promotion"].includes(who.toLowerCase())) return { exitCode: 1, stderr: `--as ${who} is reserved: it names a person on a page or the system` };
     const bad = { exitCode: 1, stderr: usage };
     if (action === "autorun") return autorun(reg, io);
     if (!action || !["signals", "goals", "unfreeze", "experiments", "journal", "tasks"].includes(action)) return bad;   // no campaign lookup for a bare command
