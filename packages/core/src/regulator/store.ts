@@ -1,14 +1,15 @@
 // Postgres storage of the regulator: goals, state, experiments, journal, tasks, development clock.
 import type pg from "pg";
+import type { Lever } from "../learnings/domain.ts";
 import type { Goal, GoalMetric } from "./signals.ts";
 
 export type State = { frozen: boolean; frozenReason: string | null; incumbentEntryId: string | null; lastAdoptedAt: string | null };
-export type ExperimentRow = { id: string; campaignId: string; hypothesis: string; metric: string; armA: string; armB: string; status: "running" | "concluded"; verdict: "A" | "B" | "inconclusive" | "freeze" | null; result: unknown; createdBy: string; createdAt: string; concludedAt: string | null };
+export type ExperimentRow = { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; armA: string; armB: string; status: "running" | "concluded"; verdict: "A" | "B" | "inconclusive" | "freeze" | null; result: unknown; createdBy: string; createdAt: string; concludedAt: string | null };
 export type JournalRow = { id: number; campaignId: string; kind: "run" | "learning" | "note"; author: string; body: string; data: unknown; at: string };
 export type TaskRow = { id: string; campaignId: string; kind: string; brief: string; params: Record<string, unknown>; status: "open" | "claimed" | "done" | "cancelled"; claimedBy: string | null; result: unknown; createdBy: string; createdAt: string };
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
-const experimentFrom = (r: any): ExperimentRow => ({ id: r.id, campaignId: r.campaign_id, hypothesis: r.hypothesis, metric: r.metric, armA: r.arm_a_entry, armB: r.arm_b_entry, status: r.status, verdict: r.verdict, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)!, concludedAt: iso(r.concluded_at) });
+const experimentFrom = (r: any): ExperimentRow => ({ id: r.id, campaignId: r.campaign_id, hypothesis: r.hypothesis, lever: r.lever ?? null, metric: r.metric, armA: r.arm_a_entry, armB: r.arm_b_entry, status: r.status, verdict: r.verdict, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)!, concludedAt: iso(r.concluded_at) });
 const taskFrom = (r: any): TaskRow => ({ id: r.id, campaignId: r.campaign_id, kind: r.kind, brief: r.brief, params: r.params, status: r.status, claimedBy: r.claimed_by, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)! });
 
 export function regulatorStore(pool: pg.Pool) {
@@ -30,8 +31,8 @@ export function regulatorStore(pool: pg.Pool) {
                on conflict (campaign_id) do update set frozen = $2, frozen_reason = $3, incumbent_entry_id = $4, last_adopted_at = $5`,
         [campaignId, n.frozen, n.frozenReason, n.incumbentEntryId, n.lastAdoptedAt]);
     },
-    async insertExperiment(e: { campaignId: string; hypothesis: string; metric: string; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
-      return experimentFrom((await q("insert into experiment (campaign_id, hypothesis, metric, arm_a_entry, arm_b_entry, status, created_by) values ($1,$2,$3,$4,$5,'running',$6) returning *", [e.campaignId, e.hypothesis, e.metric, e.armA, e.armB, e.createdBy]))[0]);
+    async insertExperiment(e: { campaignId: string; hypothesis: string; lever: Lever; metric: string; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
+      return experimentFrom((await q("insert into experiment (campaign_id, hypothesis, lever, metric, arm_a_entry, arm_b_entry, status, created_by) values ($1,$2,$3,$4,$5,$6,'running',$7) returning *", [e.campaignId, e.hypothesis, e.lever, e.metric, e.armA, e.armB, e.createdBy]))[0]);
     },
     async experiment(id: string): Promise<ExperimentRow | null> {
       const r = (await q("select * from experiment where id = $1", [id]))[0];

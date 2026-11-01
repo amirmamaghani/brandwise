@@ -63,8 +63,8 @@ run("the loop converges, waits for maturity, resists noise and clickbait", async
         await reg.clock.advance(24 * HOUR);
       }
       const a = await sendArm(incumbent, "A"), b = await sendArm(challenger, "B");
-      const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: `Replace "${incumbent}" with "${challenger}" to raise the click rate`, armA: a.id, armB: b.id, createdBy: "test-controller" });
-      await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "a second experiment at the same time", armA: a.id, armB: b.id, createdBy: "t" }), /one variable at a time/);
+      const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: `Replace "${incumbent}" with "${challenger}" to raise the click rate`, lever: { attribute: "subject", from: incumbent.toLowerCase(), to: challenger.toLowerCase() }, armA: a.id, armB: b.id, createdBy: "test-controller" });
+      await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "a second experiment at the same time", lever: "subject: a -> b", armA: a.id, armB: b.id, createdBy: "t" }), /one variable at a time/);
 
       // first look, 6 simulated hours after sending: the numbers are still arriving, so the rails refuse to judge
       await reg.clock.advance(6 * HOUR);
@@ -95,6 +95,10 @@ run("the loop converges, waits for maturity, resists noise and clickbait", async
     assert.ok(path.some((p) => p.includes("{{first_name}}, 3 ideas for your October!! -> inconclusive")), `hysteresis: a near-identical variant must not replace the incumbent\n${path.join("\n")}`);
     assert.ok(path.some((p) => p.includes("LAST CHANCE") && p.includes("-> A") && p.includes("unsafe")), `the guard stops clickbait\n${path.join("\n")}`);
     assert.equal((await reg.journal.read(base.id, 50, "learning")).length, verdicts.length, "every conclusion is written to the journal");
+    const learned = await reg.learnings.list(base.id);
+    assert.equal(learned.filter((l) => l.evidence === "E1").length, verdicts.length, "every conclusion is a structured E1 learning");
+    assert.ok(learned.some((l) => l.kind === "null_result"), "the near-identical variant is recorded as a null result");
+    assert.ok(learned.some((l) => l.result === "unsafe"), "the clickbait variant is recorded as unsafe");
     const s = await reg.signals(base.id);
     assert.equal(s.incumbent?.title, incumbent);
     assert.ok(s.goals.find((g) => g.metric === "click_rate")!.current! > 0);
@@ -108,7 +112,7 @@ run("two unsafe arms freeze the campaign until a person clears it", async () => 
   const { reg, base, sendArm, cleanup } = await setup(prefix);
   try {
     const a = await sendArm("LAST CHANCE: act now", "A"), b = await sendArm("URGENT: final hours", "B");
-    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "Two urgent subject lines against each other", armA: a.id, armB: b.id, createdBy: "t" });
+    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "Two urgent subject lines against each other", lever: "subject_style: urgent -> urgent_caps", armA: a.id, armB: b.id, createdBy: "t" });
     await reg.clock.advance(25 * HOUR);
     assert.equal((await reg.experiments.evaluate(exp.id)).verdict, "freeze");
     const gate = (await reg.signals(base.id)).allowed.proposeExperiment;
@@ -143,8 +147,8 @@ run("arms must have separate audiences; tasks are claimed once", async () => {
   try {
     const a = await sendArm("Subject one for the test", "A");
     const sameCampaign = await core.calendar.add({ campaignId: a.campaignId, title: "Subject two", channel: "email", scheduledAt: new Date(Date.now() + HOUR).toISOString(), tier: 1, body: BODY });
-    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "Same audience gets both variants", armA: a.id, armB: sameCampaign.id, createdBy: "t" }), /different child campaigns/);
-    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "short", armA: a.id, armB: sameCampaign.id, createdBy: "t" }), /hypothesis/);
+    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "Same audience gets both variants", lever: "subject: one -> two", armA: a.id, armB: sameCampaign.id, createdBy: "t" }), /different child campaigns/);
+    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "short", lever: "subject: one -> two", armA: a.id, armB: sameCampaign.id, createdBy: "t" }), /hypothesis/);
     await assert.rejects(reg.goals.set(base.id, "open_rate", "target", 0.3), /Unknown goal metric/);
     const task = await reg.tasks.create(base.id, "editor", { kind: "write_variant", brief: "Write a subject line with a number" });
     assert.equal((await reg.tasks.claim(task.id, "author-1")).status, "claimed");
@@ -163,6 +167,8 @@ run("arms must have separate audiences; tasks are claimed once", async () => {
     const done = await reg.tasks.submitVariant(v1.id, { subject: "3 ideas for your October" }, "author-1");
     const entry = await core.calendar.get((done.result as { entry: string }).entry);
     assert.deepEqual([entry?.campaignId, entry?.channel, entry?.tier, entry?.body, entry?.status], [arm.id, "email", 1, BODY, "approved"]);
+    assert.ok(entry?.briefId, "every arm entry is linked to the brief it was written from");
+    assert.equal((done.result as { brief: string }).brief, entry?.briefId);
     const ctl = await reg.tasks.create(base.id, "editor", { kind: "write_variant", brief: "b", params: { ...params, role: "control", subject: "Our October newsletter" } });
     await reg.tasks.claim(ctl.id, "author-1");
     const c = await reg.tasks.submitVariant(ctl.id, { subject: "something else entirely" }, "author-1");

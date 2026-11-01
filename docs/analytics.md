@@ -1,6 +1,6 @@
 # Analytics: learnings, experiments, economics, paid media
 
-Status 2026-11-01: plan, nothing is built. For e-mail and paid media it replaces the sketch in `roadmap.md` §6.
+Status 2026-11-01: phase 1 is built (code in `packages/core/src/learnings/`, tests in `learnings.test.ts`, `learnings.db.test.ts` and `regulator/loop.test.ts`); phases 2 to 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
 
 Principles stay: nothing leaves without the calendar and approval; code judges, agents read aggregates; agents get tools, never credentials; providers are adapters with contract tests; Postgres is the source of truth.
 
@@ -30,6 +30,14 @@ Principles stay: nothing leaves without the calendar and approval; code judges, 
 - **Automations**: editor every 6 h (opt-in per campaign, D5), `learnings maintain` daily, `learnings mine` weekly.
 
 Done when: `editor-loop.mjs` passes with a structured learning for every conclusion; the next brief shows it with a weight; a re-test of a null-result lever is refused; every author entry carries a brief id.
+
+As built:
+- `needs_retest` is computed when learnings are read (age, contrary applications), and promotion happens when a learning is written, so there is no daily `learnings maintain`.
+- Tags live with the learnings: `entry_attribute`, with the derived subject features (number, personal, question, caps), format, length, daypart and weekday; the miner (`learnings mine`) runs over them.
+- An application's outcome is the entry's click rate 24 h after sending against the brand's pooled rate of its last five other sends; "clearly contrary" means the Wilson interval lies entirely on the other side.
+- A null result blocks a re-test unless the expected sample per arm is more than 1.2 times the one it was found at.
+- The flag that links an entry to its brief is `--brief-id` (`--brief` is the task text of `editor tasks create`).
+- Not verified here: `editor autorun` and the automations need a bb instance, and `editor-loop.mjs` needs real agents.
 
 ## Phase 2. Experiments that can conclude (S–M)
 

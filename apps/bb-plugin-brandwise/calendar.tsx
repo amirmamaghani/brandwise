@@ -421,6 +421,38 @@ export function CalendarPage() {
 const SELECT = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 const TEXTAREA = "w-full resize-y rounded-md border border-input bg-background p-2 text-sm";
 
+const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "typo", "offer", "other"] as const;
+
+/** What the entry was written from: its brief (explore or exploit slot), the learnings it applies or tests, and its tags. */
+function EntryLearnings({ entry }: { entry: CalendarEntry }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }> } | null>(null);
+  useEffect(() => {
+    let live = true;
+    rpc.call("entry_learnings", { id: entry.id }).then((r) => live && setInfo(r), () => live && setInfo(null));
+    return () => { live = false; };
+  }, [entry.id, rpc]);
+  if (info === null) return null;
+  const tags = Object.entries(info.attributes).filter(([, a]) => a.source !== "derived");
+  const byAgent = entry.createdBy !== "ui";
+  if (info.briefId === null && info.applied.length === 0 && tags.length === 0) {
+    return byAgent ? <p className="text-xs text-muted-foreground">No learnings declared: the author did not say which brief it wrote from.</p> : null;
+  }
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border p-2 text-sm">
+      <p className="text-xs text-muted-foreground">
+        Written from brief {info.briefId ?? "none"}{info.slot ? ` · ${info.slot} slot` : ""}
+      </p>
+      {info.applied.map((a) => (
+        <p key={a.id} className="text-xs">
+          <span className="font-medium">{a.mode === "test" ? "Tests" : "Applies"}</span> {a.id} ({a.evidence ?? "rule"}): {a.statement}
+        </p>
+      ))}
+      {tags.length ? <p className="text-xs text-muted-foreground">Tags: {tags.map(([k, a]) => `${k}=${a.value}`).join(", ")}</p> : null}
+    </div>
+  );
+}
+
 function EntryDialog({
   entry,
   mode,
@@ -438,6 +470,7 @@ function EntryDialog({
   const preview = creative === undefined ? null : (creative.dataUri ?? creative.thumb);
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
+  const [reason, setReason] = useState<string>("");
   const [form, setForm] = useState({ title: "", body: "", link: "", channel: CHANNELS[0], at: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -445,6 +478,7 @@ function EntryDialog({
   useEffect(() => {
     setEditing(false);
     setNote("");
+    setReason("");
     setError(null);
     if (entry !== null) {
       setForm({ title: entry.title, body: entry.body, link: entry.link ?? "", channel: entry.channel, at: toLocalInput(new Date(entry.scheduledAt)) });
@@ -467,7 +501,7 @@ function EntryDialog({
     }
   };
   const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision }), closeEntry);
-  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note }), closeEntry);
+  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note, reason: reason === "" ? null : (reason as (typeof REVIEW_REASONS)[number]) }), closeEntry);
   const save = () => {
     if (entry === null) return;
     const timeChanged = form.at !== toLocalInput(new Date(entry.scheduledAt));
@@ -573,7 +607,14 @@ function EntryDialog({
                   )}
                   <dt className="text-muted-foreground">Created by</dt>
                   <dd>{entry.createdBy}</dd>
+                  {entry.approvedBy === null ? null : (
+                    <>
+                      <dt className="text-muted-foreground">Approved by</dt>
+                      <dd>{entry.approvedBy}{entry.approvedAt ? ` · ${whenOf(entry.approvedAt)}` : ""}</dd>
+                    </>
+                  )}
                 </dl>
+                <EntryLearnings key={`${entry.id}:${entry.briefId ?? ""}`} entry={entry} />
               </>
             )}
             {changing ? (
@@ -587,6 +628,13 @@ function EntryDialog({
                   aria-label="What should change"
                   autoFocus
                 />
+                <select className={SELECT} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason">
+                  <option value="">Reason (optional)</option>
+                  {REVIEW_REASONS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">The reason is counted: send-backs with the same reason become a rule the agents keep, once you confirm it on the Learnings page.</p>
               </div>
             ) : null}
             {entry.status === "pending_approval" && entry.tier === 3 && !editing && !changing ? (

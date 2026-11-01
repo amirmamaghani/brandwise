@@ -40,12 +40,16 @@ The statistics (`stats.ts`) are two-sided two-proportion z-test and Wilson inter
 
 ```
 bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]
-bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis "..." | evaluate <id>
+bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis "..." --lever "attribute: from -> to" | evaluate <id> | backfill
 bb brandwise editor journal read [--limit n] [--kind learning] | write "<text>"
 bb brandwise editor tasks list | create --kind <k> --brief "..." [--params '<json>'] | claim <id> | complete <id> [--result '<json>']
 bb brandwise editor goals [set ...] | unfreeze
 bb brandwise sim status | advance <90m|24h|2d> | reset
+bb brandwise brief --campaign <c> --channel email          (what is known, what not to re-test, the reviewer's rules)
+bb brandwise editor autorun                                (the automation: starts the editor or author only when code finds work)
 ```
+
+Every verdict becomes a structured **learning** (E1) keyed on the experiment's lever; an inconclusive one becomes a null result that blocks a re-test of the same lever at the same audience size until it ages out. Authors and page agents read the same learnings through `brief`. Details: [`analytics.md`](analytics.md), phase 1.
 
 The commands take the always-on base campaign (a child resolves to its base). The identity given with `--as` is a label for the journal, **not** an authorisation: whether a caller is really the editor is not enforced yet, only the skills say who may do what.
 
@@ -81,5 +85,5 @@ A cycle is: an editor run, an author run if there are open tasks, one scheduler 
 
 - Verified caller identity (editor, author, person), and an approver agent with a policy and a veto window.
 - Other channels, budgets for paid promotion. (Other levers than the subject exist for e-mail: an experiment can vary one slot of a published template, see `docs/email-templates.md`.)
-- Per-campaign rails (they are defaults in code), and a UI page for goals, experiments and the journal.
+- Per-campaign rails (they are defaults in code), and a UI page for goals, experiments and the journal (learnings have one: Results > Learnings).
 - Multi-armed experiments (only A/B), and sequential testing.

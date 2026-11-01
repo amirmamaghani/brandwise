@@ -3,13 +3,16 @@
 import type { Core } from "../index.ts";
 import type { createEmail } from "../email/index.ts";
 import type { Library } from "../email/templates/library.ts";
-import { DEFAULT_RAILS, canPropose, judge, type Rails } from "./rails.ts";
+import { createLearnings, emailMeasure, type Learnings } from "../learnings/index.ts";
+import { parseLever, type Lever } from "../learnings/domain.ts";
+import { DEFAULT_RAILS, canPropose, judge, type ArmData, type Rails } from "./rails.ts";
+import { minDetectableLift } from "./stats.ts";
 import { GOAL_METRICS, armOf, buildSignals, type Goal, type GoalMetric, type SendView } from "./signals.ts";
 import { regulatorStore, type ExperimentRow } from "./store.ts";
 
 type Email = ReturnType<typeof createEmail>;
 
-export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null }) {
+export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null; /** Where verdicts become learnings; one is made on the development clock when not given. */ learnings?: Learnings }) {
   const { core, email } = deps;
   const rails: Rails = { ...DEFAULT_RAILS, ...deps.rails, guards: { ...DEFAULT_RAILS.guards, ...deps.rails?.guards } };
   const store = regulatorStore(core.pool);
@@ -21,6 +24,17 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     async reset(): Promise<void> { await store.setClockOffset(0); },
   };
   const asOfDate = async (asOf?: string) => (asOf ? new Date(asOf) : clock.now());
+  const learnings = deps.learnings ?? createLearnings({ core, now: () => clock.now(), measure: emailMeasure(email, rails.matureAfterHours) });
+
+  /** A concluded experiment becomes an E1 learning: the verdict, the effect with its interval, and what the test could show. */
+  async function learn(e: ExperimentRow, verdict: string, reasons: string[], stats: { rateA: number; rateB: number; lift: number | null; p: number } | null, a: ArmData, b: ArmData, at: string) {
+    const n = Math.min(a.delivered, b.delivered);
+    return learnings.fromExperiment({
+      id: e.id, campaignId: e.campaignId, hypothesis: e.hypothesis, lever: e.lever, metric: e.metric, verdict, reasons, stats,
+      arms: [{ delivered: a.delivered, clicks: a.clicks }, { delivered: b.delivered, clicks: b.clicks }],
+      mde: a.delivered > 0 ? minDetectableLift(a.clicks / a.delivered, n) : null, decidedAt: at,
+    });
+  }
 
   /** Every e-mail send under the campaign (base or itself), as numbers at the given time. */
   async function sendViews(campaignId: string, asOf: Date): Promise<SendView[]> {
@@ -53,6 +67,7 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     rails,
     store,
     clock,
+    learnings,
     goals: {
       list: (campaignId: string) => store.goals(campaignId),
       /** Goals are the human's: this is called by people (CLI/UI), the agent's skill forbids it and the editor persona has no reason to. */
@@ -66,10 +81,14 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     async unfreeze(campaignId: string) { await store.patchState(campaignId, { frozen: false, frozenReason: null }); },
     experiments: {
       list: (campaignId: string, status?: string) => store.experiments(campaignId, status),
-      /** Start an A/B experiment between two calendar entries. The rails decide whether it may start. */
-      async propose(input: { campaignId: string; hypothesis: string; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
+      /**
+       * Start an A/B experiment between two calendar entries. It names its lever, the one variable it changes ("subject_style: plain ->
+       * number"). The rails decide whether it may start, and a lever that already showed no difference at this size is refused.
+       */
+      async propose(input: { campaignId: string; hypothesis: string; lever: string | Lever; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
         const at = await clock.now();
         if (input.hypothesis.trim().length < 10) throw new Error("Write the hypothesis: what you change and what you expect (at least a sentence)");
+        const lever = typeof input.lever === "string" ? parseLever(input.lever) : input.lever;
         const [state, running, used, a, b] = await Promise.all([store.state(input.campaignId), store.experiments(input.campaignId, "running"), store.usedArms(), core.calendar.get(input.armA), core.calendar.get(input.armB)]);
         const ok = canPropose({ ...state, running: running.length }, at, rails);
         if (!ok.ok) throw new Error(`Cannot start an experiment: ${ok.reason}`);
@@ -83,7 +102,9 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!under(a.campaignId) || !under(b.campaignId)) throw new Error("Both arms must belong to the campaign (or its child campaigns)");
         if (a.campaignId === b.campaignId) throw new Error("The arms must be in different child campaigns: each arm needs its own audience, or the same people would get both variants and the result would be contaminated");
         if (used.has(a.id) || used.has(b.id)) throw new Error("An entry can be in one experiment only");
-        return store.insertExperiment({ campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), metric: "click_rate", armA: a.id, armB: b.id, createdBy: input.createdBy });
+        const gate = await learnings.retestGate(input.campaignId, lever, (await signals(input.campaignId)).power?.deliveredPerArm ?? null);
+        if (!gate.ok) throw new Error(`Cannot start an experiment: ${gate.reason}`);
+        return store.insertExperiment({ campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), lever, metric: "click_rate", armA: a.id, armB: b.id, createdBy: input.createdBy });
       },
       /**
        * Judge a running experiment with the rails. While data is still arriving it only reports what to wait for; once it can
@@ -94,15 +115,29 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!e) throw new Error(`No experiment ${id}`);
         if (e.status === "concluded") return { experiment: e, verdict: e.verdict!, reasons: [] as string[], readyAt: null, final: true };
         const at = await asOfDate(asOf);
-        const j = judge(await armData(e.armA, at), await armData(e.armB, at), at, rails);
+        const [armA, armB] = [await armData(e.armA, at), await armData(e.armB, at)];
+        const j = judge(armA, armB, at, rails);
         if (j.verdict === "wait") return { experiment: e, verdict: "wait" as const, reasons: j.reasons, readyAt: j.readyAt, final: false };
         await store.conclude(id, j.verdict, { reasons: j.reasons, stats: j.stats, asOf: at.toISOString() }, at.toISOString());
         const st = await store.state(e.campaignId);
         if (j.verdict === "B") await store.patchState(e.campaignId, { incumbentEntryId: e.armB, lastAdoptedAt: at.toISOString() });
         else if (j.verdict === "A" && st.incumbentEntryId === null) await store.patchState(e.campaignId, { incumbentEntryId: e.armA });
         else if (j.verdict === "freeze") await store.patchState(e.campaignId, { frozen: true, frozenReason: j.reasons.join("; ") });
+        await learn(e, j.verdict, j.reasons, j.stats, armA, armB, at.toISOString());
         await store.journalWrite(e.campaignId, "learning", "regulator", `Experiment ${id} "${e.hypothesis}": ${j.verdict === "B" ? "the challenger (B) won and is now the incumbent" : j.verdict === "A" ? "the control (A) stays" : j.verdict === "freeze" ? "FROZEN" : "inconclusive, nothing changes"}. ${j.reasons.join(" ")}`, { experiment: id, verdict: j.verdict, stats: j.stats });
         return { experiment: (await store.experiment(id))!, verdict: j.verdict, reasons: j.reasons, readyAt: null, final: true };
+      },
+      /** Structured learnings for experiments concluded before learnings existed (one-off; idempotent). */
+      async backfill(campaignId: string): Promise<number> {
+        let n = 0;
+        for (const e of await store.experiments(campaignId, "concluded")) {
+          if (await learnings.store.byExperiment(e.id)) continue;
+          const r = (e.result ?? {}) as { reasons?: string[]; stats?: { rateA: number; rateB: number; lift: number | null; p: number } | null; asOf?: string };
+          const at = new Date(r.asOf ?? e.concludedAt ?? e.createdAt);
+          await learn(e, e.verdict ?? "inconclusive", r.reasons ?? [], r.stats ?? null, await armData(e.armA, at), await armData(e.armB, at), e.concludedAt ?? at.toISOString());
+          n++;
+        }
+        return n;
       },
     },
     journal: {
@@ -119,7 +154,7 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
        * (arm campaign, body, tier, time), so an arm can never be mis-scheduled or mis-addressed. The control always uses what the task
        * gives exactly. With `params.template` the arm is built from a published template and content (slots), otherwise from plain text.
        */
-      async submitVariant(id: string, input: { subject?: string; content?: Record<string, unknown> }, by: string) {
+      async submitVariant(id: string, input: { subject?: string; content?: Record<string, unknown>; briefId?: string; applies?: string[]; tests?: string[]; tags?: string }, by: string) {
         const t = await store.task(id);
         if (!t || t.kind !== "write_variant") throw new Error(`Task ${id} is not a write_variant task`);
         if (t.status !== "claimed") throw new Error(`Task ${id} is ${t.status}: claim it first (and only once)`);
@@ -128,6 +163,11 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         const arm = await core.campaigns.resolve(p.arm);
         const now = (await clock.now()).toISOString();
         const tier = (p.tier as 1 | 2 | 3) ?? 1;
+        /** Every arm entry is linked to the brief it was written from (made here when the author did not pass one) and to what it applies. */
+        const link = async (entryId: string) => {
+          const briefId = input.briefId ?? (typeof t.params.brief === "string" ? t.params.brief : (await learnings.brief({ campaignId: arm.id, channel: "email", createdBy: by })).id);
+          return learnings.attach(entryId, { briefId, applies: input.applies, tests: input.tests, tags: input.tags });
+        };
 
         if (p.template?.id) {   // a template experiment: the variable can be any slot
           const lib = deps.library?.();
@@ -136,7 +176,8 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
           const content = p.role === "control" ? base : { ...base, ...(input.content ?? {}), ...(input.subject ? { subject: input.subject.trim() } : {}) };
           if (p.role === "challenger" && JSON.stringify(content) === JSON.stringify(base)) throw new Error("The challenger must differ from the control: change a slot (--content '{\"cta_label\": ...}') or the subject");
           const made = await lib.entries.create({ campaignId: arm.id, scheduledAt: now, tier, templateId: p.template.id, version: p.template.version, locale: p.locale, content, createdBy: by });
-          return store.taskFinish(id, "done", { entry: made.entry.id, subject: made.render.subject, status: made.entry.status, templateVersion: made.version.version }) as Promise<NonNullable<Awaited<ReturnType<typeof store.taskFinish>>>>;
+          const linked = await link(made.entry.id);
+          return store.taskFinish(id, "done", { entry: made.entry.id, subject: made.render.subject, status: made.entry.status, templateVersion: made.version.version, brief: linked.briefId }) as Promise<NonNullable<Awaited<ReturnType<typeof store.taskFinish>>>>;
         }
 
         if (!p.body) throw new Error("The task has no body: ask the editor to create it again");
@@ -147,7 +188,8 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
           if (title === (p.baseSubject ?? p.subject)) throw new Error("The challenger must differ from the incumbent subject");
         }
         const entry = await core.calendar.add({ campaignId: arm.id, title, channel: "email", scheduledAt: now, tier, body: p.body, createdBy: by });
-        return store.taskFinish(id, "done", { entry: entry.id, subject: title, status: entry.status }) as Promise<NonNullable<Awaited<ReturnType<typeof store.taskFinish>>>>;
+        const linked = await link(entry.id);
+        return store.taskFinish(id, "done", { entry: entry.id, subject: title, status: entry.status, brief: linked.briefId }) as Promise<NonNullable<Awaited<ReturnType<typeof store.taskFinish>>>>;
       },
       complete: async (id: string, result: unknown) => { const t = await store.taskFinish(id, "done", result); if (!t) throw new Error(`Task ${id} is already finished or unknown`); return t; },
     },

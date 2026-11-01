@@ -15,6 +15,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ApprovalsSidebar, CalendarPage, tookPlace, useCalendar } from "./calendar";
+import { ResultsPage } from "./results";
 import { GlobalConfig, ScopedConfig } from "./scoped-config";
 import { SettingsPage, SettingsSection, SettingsSidebar, addSettingsSection } from "./settings";
 
@@ -961,6 +962,13 @@ export default definePluginApp((app) => {
     icon: "brandwise/email",
     path: "email",
     component: EmailPage,
+  });
+  app.slots.navPanel({
+    id: "results",
+    title: "Results",
+    icon: "brandwise/results",
+    path: "results",
+    component: ResultsPage,
   });
   // "Start agent" in the side panel of every page above: the tab reads the page's route, so the agent knows where the user is
   for (const screen of SCREENS) {

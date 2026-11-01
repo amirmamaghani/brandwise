@@ -3,6 +3,17 @@
 import type { Core } from "./core/index.ts";
 import type { Regulator } from "./core/regulator/index.ts";
 import type { Signals } from "./core/regulator/signals.ts";
+import { whoIsDue } from "./core/regulator/autorun.ts";
+
+/** What `editor autorun` needs from the host: which campaigns opted in, how to start an agent thread, and when it last did. */
+export type AutoRunHost = {
+  enabled: (campaignId: string) => Promise<boolean>;
+  spawn: (prompt: string, campaignId: string) => Promise<string>;
+  lastRun: (key: string) => Promise<number | null>;
+  setLastRun: (key: string, at: number) => Promise<void>;
+};
+/** An agent that was started less than this ago is still working or just finished: do not start another. */
+const AUTORUN_GAP_MS = 2 * 3_600_000;
 
 type Io = { val: (argv: string[], name: string) => string | undefined; positional: (argv: string[]) => string[]; reply: (value: unknown, text: string) => { exitCode: number; stdout: string }; usage: string };
 
@@ -35,7 +46,7 @@ export function fmtSignals(s: Signals): string {
   return lines.join("\n");
 }
 
-export function createEditorCli(deps: { core: () => Core; regulator: () => Regulator | null }) {
+export function createEditorCli(deps: { core: () => Core; regulator: () => Regulator | null; autorun?: AutoRunHost }) {
   /** The regulator works on the always-on base: a campaign (or a child of it) given on the command line resolves to its base. */
   async function base(args: string[], io: Io) {
     const c = await deps.core().campaigns.resolve(io.val(args, "--campaign"));
@@ -49,6 +60,7 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     const rest = positional(args.slice(2));
     const who = val(args, "--as") ?? "agent";
     const bad = { exitCode: 1, stderr: usage };
+    if (action === "autorun") return autorun(reg, io);
     if (!action || !["signals", "goals", "unfreeze", "experiments", "journal", "tasks"].includes(action)) return bad;   // no campaign lookup for a bare command
     const b = await base(args, io);
     const asOf = val(args, "--as-of");
@@ -68,11 +80,13 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     if (action === "experiments") {
       const sub = rest[0];
       if (sub === "propose") {
-        const [armA, armB, hypothesis] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis")];
+        const [armA, armB, hypothesis, lever] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis"), val(args, "--lever")];
         if (!armA || !armB || !hypothesis) return bad;
-        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, createdBy: who });
-        return reply(e, `Experiment ${e.id} started: A ${e.armA} (control) against B ${e.armB} (challenger). The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}`);
+        if (!lever) return { exitCode: 1, stderr: 'Name the one thing the experiment changes: --lever "attribute: from -> to", e.g. --lever "subject_style: plain -> number"' };
+        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who });
+        return reply(e, `Experiment ${e.id} started: A ${e.armA} (control) against B ${e.armB} (challenger), lever ${e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "?"}. The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}`);
       }
+      if (sub === "backfill") { const n = await reg.experiments.backfill(b.id); return reply({ created: n }, `${n} structured learning(s) made from earlier verdicts.`); }
       if (sub === "evaluate") {
         if (!rest[1]) return bad;
         const r = await reg.experiments.evaluate(rest[1], asOf);
@@ -104,14 +118,45 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
       if (sub === "submit") { // an author's way to finish a write_variant task: only the subject is theirs, the rest comes from the task
         const subject = val(args, "--subject"), content = val(args, "--content");
         if (!rest[1] || (subject === undefined && content === undefined)) return bad;
-        const t = await reg.tasks.submitVariant(rest[1], { subject, content: content ? (JSON.parse(content) as Record<string, unknown>) : undefined }, who);
-        return reply(t, `Task ${t.id} done: entry ${(t.result as { entry: string }).entry} "${(t.result as { subject: string }).subject}" is in the calendar (${(t.result as { status: string }).status}).`);
+        const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
+        const t = await reg.tasks.submitVariant(rest[1], { subject, content: content ? (JSON.parse(content) as Record<string, unknown>) : undefined, briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") }, who);
+        const r = t.result as { entry: string; subject: string; status: string; brief?: string };
+        return reply(t, `Task ${t.id} done: entry ${r.entry} "${r.subject}" is in the calendar (${r.status}), written from brief ${r.brief ?? "?"}.`);
       }
       if (sub === "complete") { if (!rest[1]) return bad; const t = await reg.tasks.complete(rest[1], val(args, "--result") ? JSON.parse(val(args, "--result")!) : {}); return reply(t, `Task ${t.id} done.`); }
       const list = await reg.tasks.list(b.id, val(args, "--status"));
       return reply(list, list.map((t) => `${t.id}  ${t.status}${t.claimedBy ? " by " + t.claimedBy : ""}  ${t.kind}: ${t.brief}  ${JSON.stringify(t.params)}`).join("\n") || "No tasks.");
     }
     return bad;
+  }
+
+  /**
+   * The editor's alarm clock (a bb automation every few hours): for each always-on campaign that opted in (setting editor.autoRun),
+   * code decides who has work, and only then an agent thread is started. Prints nothing when nobody is due (a silent tick).
+   */
+  async function autorun(reg: Regulator, io: Io) {
+    const host = deps.autorun;
+    if (!host) return { exitCode: 1, stderr: "autorun needs the bb host (threads); it runs inside the plugin" };
+    const lines: string[] = [];
+    const started: { campaign: string; role: string; thread: string; reason: string }[] = [];
+    for (const c of (await deps.core().campaigns.list()).filter((x) => x.kind === "always_on")) {
+      if (!(await host.enabled(c.id))) continue;
+      const [s, tasks, experiments] = await Promise.all([reg.signals(c.id), reg.tasks.list(c.id), reg.experiments.list(c.id)]);
+      const due = whoIsDue(s, tasks, experiments);
+      for (const role of ["editor", "author"] as const) {
+        if (!due[role]) continue;
+        const key = `autorun:${role}:${c.id}`, last = await host.lastRun(key);
+        if (last !== null && Date.now() - last < AUTORUN_GAP_MS) continue;
+        const prompt = role === "editor"
+          ? `Run your editor loop once for the campaign "${c.name}" (use the editor skill). Be brief in your final answer.`
+          : `Do the open tasks of the campaign "${c.name}" (use the author skill). Be brief in your final answer.`;
+        const thread = await host.spawn(prompt, c.id);
+        await host.setLastRun(key, Date.now());
+        started.push({ campaign: c.name, role, thread, reason: due.reason });
+        lines.push(`${c.name}: started the ${role} (thread ${thread}): ${due.reason}`);
+      }
+    }
+    return io.reply(started, lines.join("\n"));
   }
 
   /** The development clock: lets a simulated provider and the rails live days in minutes. Only affects reports and simulated sends. */

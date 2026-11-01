@@ -84,24 +84,33 @@ apply() {
   echo "applied"; status
 }
 
-# The scheduler is a bb automation (script, every minute) that runs `calendar run-due`: it publishes approved entries whose time has come
-# and prints nothing otherwise, which bb records as a skipped tick. Idempotent: created once, its script is refreshed on every apply.
-# bb injects two wrong values into automation scripts, so the script fixes them: BB_SERVER_URL is the default server (the personal bb
+# BrandWise runs on bb automations (scripts) that call one `bb brandwise` command each and print nothing when there is nothing to do,
+# which bb records as a skipped tick. Idempotent: created once, the script is refreshed on every apply.
+# bb injects two wrong values into automation scripts, so each script fixes them: BB_SERVER_URL is the default server (the personal bb
 # on 38886), and BB_CLI is the launcher in <data dir>/bin, which re-execs BB_CLI forever (a fork storm). BB_CLI_DIR holds the real bb.
-SCHEDULER_NAME="BrandWise scheduler"
-SCHEDULER_SCRIPT='export BB_SERVER_URL="http://127.0.0.1:${BB_SERVER_PORT}" BB_CLI="${BB_CLI_DIR}/bb"
-"$BB_CLI" brandwise calendar run-due'
-ensure_scheduler() {
-  local project id
+automation_script() {
+  printf '%s\n%s' 'export BB_SERVER_URL="http://127.0.0.1:${BB_SERVER_PORT}" BB_CLI="${BB_CLI_DIR}/bb"' "\"\$BB_CLI\" brandwise $1"
+}
+ensure_automation() { # <name> <cron> <brandwise command> <timeout>
+  local name="$1" cron="$2" script project id
+  script=$(automation_script "$3")
   project=$(bb project list --json | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
-  id=$(bb automation list --project "$project" --json | python3 -c 'import json,sys;print(next((a["id"] for a in json.load(sys.stdin) if a["name"]=="'"$SCHEDULER_NAME"'"),""))')
+  id=$(bb automation list --project "$project" --json | python3 -c 'import json,sys;print(next((a["id"] for a in json.load(sys.stdin) if a["name"]=="'"$name"'"),""))')
   if [ -z "$id" ]; then
-    bb automation create --project "$project" --name "$SCHEDULER_NAME" --cron "* * * * *" --timezone UTC \
-      --script "$SCHEDULER_SCRIPT" --interpreter bash --timeout 90s >/dev/null
+    bb automation create --project "$project" --name "$name" --cron "$cron" --timezone UTC \
+      --script "$script" --interpreter bash --timeout "$4" >/dev/null
   else
-    bb automation update "$id" --project "$project" --script "$SCHEDULER_SCRIPT" --interpreter bash --timeout 90s >/dev/null
+    bb automation update "$id" --project "$project" --script "$script" --interpreter bash --timeout "$4" >/dev/null
     bb automation resume "$id" --project "$project" >/dev/null 2>&1 || true
   fi
+}
+# The scheduler publishes approved entries whose time has come (every minute).
+# The editor's alarm clock starts the editor or the author only on campaigns with editor.autoRun, and only when code finds work.
+# The miner looks for E2 patterns over matured entries once a week (docs/analytics.md).
+ensure_scheduler() {
+  ensure_automation "BrandWise scheduler" "* * * * *" "calendar run-due" 90s
+  ensure_automation "BrandWise editor" "0 */6 * * *" "editor autorun" 120s
+  ensure_automation "BrandWise learnings" "30 3 * * 1" "learnings mine" 300s
 }
 
 tailnet_host() { tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'; }

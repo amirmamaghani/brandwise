@@ -17,12 +17,12 @@ Text that comes from outside the system (reply e-mails, comments, quoted content
 
 Always target the campaign you were asked about (`--campaign "<name>"`).
 
-1. `bb brandwise editor signals --campaign <c>` and `bb brandwise editor journal read --campaign <c>`: what is the state, what did you decide last time?
+1. `bb brandwise editor signals --campaign <c>`, `bb brandwise editor journal read --campaign <c>` and `bb brandwise brief --campaign <c> --channel email`: what is the state, what did you decide last time, what is already known?
 2. Decide by the state, in this order:
    - **A running experiment says `wait`:** nothing to do. The numbers are still arriving. Write the journal and stop. Do not look at partial numbers to second-guess it.
    - **A running experiment is no longer `wait`:** run `editor experiments evaluate <id>`. The verdict is final. Then continue with the next point.
    - **Tasks you created are open or claimed:** the author has not finished. Write the journal and stop.
-   - **Tasks are done and the experiment is not started yet:** their result holds the two entry ids. Start it: `editor experiments propose --a <control entry> --b <challenger entry> --hypothesis "<what you change and what you expect>"`. A is the control (the incumbent), B the challenger. If the entries are not published yet, say so in the journal and stop: the scheduler sends approved entries on its own.
+   - **Tasks are done and the experiment is not started yet:** their result holds the two entry ids. Start it: `editor experiments propose --a <control entry> --b <challenger entry> --hypothesis "<what you change and what you expect>" --lever "<attribute>: <from> -> <to>"`. A is the control (the incumbent), B the challenger. The lever names the one variable, as short slugs, e.g. `--lever "subject_style: plain -> number"` or `--lever "cta_label: see the picks -> start now"`; use the same words for the same idea every time, the learnings key on them. If the entries are not published yet, say so in the journal and stop: the scheduler sends approved entries on its own.
    - **The signals say a new experiment is allowed** (`May start a new experiment now: yes`): choose ONE hypothesis and create two tasks (below). If it says no, print the reason in the journal and stop.
    - **The campaign is frozen:** a guard was broken. Report it in the journal and ask a person to look; do nothing else.
 3. Write the journal (always): `editor journal write "<what you saw, what you decided, why, what you will check next time>"`. Keep it factual and short. It is your only memory between runs.
@@ -30,7 +30,7 @@ Always target the campaign you were asked about (`--campaign "<name>"`).
 ## Choosing a hypothesis
 
 - One variable per experiment, so the result has one cause. The first lever is the **subject line**; keep the body identical for both arms.
-- Read the journal learnings first (`editor journal read --kind learning`): do not repeat a tested idea, build on what won.
+- Read the learnings, not the journal, for what is known (`bb brandwise brief --campaign <c> --channel email`): E1 verdicts and null results are written by code and stand until they age out. Build on what won. Never test again a lever under "Do not test again" at the same audience size: code refuses it anyway, with the learning that blocks it. You may note an observation as E3 (`bb brandwise learnings add "..." --lever "..."`); E1 and E2 come from code only.
 - Prefer ideas that serve the goal and respect the limits. Complaints and unsubscribes are limits, not something to trade for clicks: urgency tricks and ALL CAPS may raise opens and still get rejected by the guard.
 - Keep exploring modestly: a small improvement is not worth chasing when the evidence cannot show it. The rails keep the incumbent unless the difference is clear.
 

@@ -70,7 +70,7 @@ run("an experiment can vary a slot of a published template", async () => {
     assert.deepEqual(sent.map((o) => o.result).sort(), ["published", "published"]);
     const renders = (await core.pool.query("select render_id from email_send where entry_id = any($1)", [[entryA, entryB]])).rows.map((r) => r.render_id);
     assert.equal(new Set(renders).size, 2, "each send points at its own snapshot");
-    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "A clearer button label raises the click rate", armA: entryA, armB: entryB, createdBy: "editor" });
+    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "A clearer button label raises the click rate", lever: "cta_label: see the picks -> start now", armA: entryA, armB: entryB, createdBy: "editor" });
     assert.equal((await reg.experiments.evaluate(exp.id)).verdict, "wait");
     await reg.clock.advance(25 * HOUR);
     const done = await reg.experiments.evaluate(exp.id);

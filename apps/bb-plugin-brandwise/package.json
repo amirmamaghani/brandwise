@@ -19,6 +19,7 @@
         "campaign": "./icons/campaign.svg",
         "video": "./icons/video.svg",
         "email": "./icons/email.svg",
+        "results": "./icons/results.svg",
         "settings": "./icons/settings.svg"
       }
     },

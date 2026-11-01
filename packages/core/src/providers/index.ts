@@ -75,6 +75,10 @@ export const SETTING_FIELDS: SettingField[] = [
     options: ["none", "chrome", "safari", "firefox", "brave", "edge"], default: "none",
     description: "Instagram shows photos and many posts to signed-in sessions only. Pick the browser you are signed in to Instagram in and downloads use its session (macOS may ask for Keychain access). None = anonymous downloads. Only the user sets this, agents never choose a session.",
   },
+  {
+    key: "editor.autoRun", label: "Run the editor on a schedule", group: "Editor", type: "boolean", default: false,
+    description: "Set on an always-on campaign: every few hours a bb automation starts the editor (and the author for open tasks), but only when code finds work for them. Off by default. Only the user sets this.",
+  },
   { key: "generation.provider", label: "Provider", description: "Which provider generates creatives.", group: "Generation", type: "select", options: PROVIDERS.map((p) => p.id), default: PROVIDERS[0].id },
   ...PROVIDERS.flatMap((p) => [...p.fields, ...budgetFields(p)].map((f) => ({ ...f, key: `${p.id}.${f.key}`, group: p.label }))),
 ];

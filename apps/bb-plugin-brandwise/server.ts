@@ -4,13 +4,13 @@
 // Approved entries are fired by `calendar run-due`, which a bb automation runs every minute (infra/bb-instance/provision.sh).
 import { defineRpcContract, type BbPluginApi, type PluginSettingDescriptor } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
+import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, REVIEW_REASONS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
 import { randomBytes } from "node:crypto";
 import * as cp from "node:child_process";
 import * as fsx from "node:fs";
 import * as osx from "node:os";
 import * as px from "node:path";
-import { agentContract, createAgents } from "./agents.ts";
+import { agentContract, createAgents, spawnAgentThread } from "./agents.ts";
 import { productCli } from "./product.ts";
 import { createVideo, videoContract } from "./video.ts";
 import { createEmailTemplates, templatesContract } from "./email-templates.ts";
@@ -20,6 +20,8 @@ import { createEmail } from "./core/email/index.ts";
 import { createRegulator } from "./core/regulator/index.ts";
 import { regulatorStore } from "./core/regulator/store.ts";
 import { createEditorCli } from "./editor.ts";
+import { createLearnings, emailMeasure } from "./core/learnings/index.ts";
+import { createLearningsCli } from "./learnings-cli.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
 
@@ -35,6 +37,12 @@ const entrySchema = z.object({
   scheduledAt: z.string(), tier: tierSchema, status: z.enum(STATUSES), assetId: z.string().nullable(), createdBy: z.string(),
   body: z.string(), link: z.string().nullable(), reviewNote: z.string().nullable(),
   attempts: z.number(), externalId: z.string().nullable(), externalUrl: z.string().nullable(), error: z.string().nullable(),
+  briefId: z.string().nullable(), approvedAt: z.string().nullable(), approvedBy: z.string().nullable(),
+});
+const learningSchema = z.object({
+  id: z.string(), scope: z.string(), kind: z.string(), evidence: z.string().nullable(), result: z.string().nullable(), statement: z.string(),
+  channel: z.string().nullable(), status: z.string(), effectiveStatus: z.string(), contrary: z.number(), createdBy: z.string(),
+  confirmedBy: z.string().nullable(), decidedAt: z.string(), sourceIds: z.array(z.string()),
 });
 const UI_STATUSES = ["draft", "linted", "approved", "archived"] as const;
 const creativeSchema = z.object({
@@ -137,7 +145,19 @@ export const rpcContract = defineRpcContract({
     output: entrySchema,
   },
   calendar_unapprove: { input: z.object({ id: z.string() }), output: entrySchema },
-  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000) }), output: entrySchema },
+  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000), reason: z.enum(REVIEW_REASONS).nullable().optional() }), output: entrySchema },
+  /** What an entry was written from: its brief, the learnings it applies or tests, its attributes (the approval card). */
+  entry_learnings: {
+    input: z.object({ id: z.string() }),
+    output: z.object({
+      briefId: z.string().nullable(), slot: z.string().nullable(),
+      applied: z.array(z.object({ id: z.string(), mode: z.string(), statement: z.string(), evidence: z.string().nullable() })),
+      attributes: z.record(z.string(), z.object({ value: z.string(), source: z.string() })),
+    }),
+  },
+  learnings_list: { input: z.object({ campaignId: z.string() }), output: z.object({ learnings: z.array(learningSchema) }) },
+  /** A person's actions on a learning: confirm a proposed reviewer preference, or retire a learning. */
+  learning_set_status: { input: z.object({ id: z.string(), action: z.enum(["confirm", "retire"]) }), output: z.object({ ok: z.boolean() }) },
   calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]) }), output: entrySchema },
   creatives_list: { input: z.null(), output: z.object({ creatives: z.array(creativeSchema) }) },
   creatives_upload: {
@@ -294,9 +314,21 @@ export default async function plugin(bb: BbPluginApi) {
     pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
     sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
   });
+  // Learnings (docs/analytics.md): verdicts and patterns as structured rows, the brief agents read before writing. On the development clock.
+  const devNow = async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000);
+  const learnings = core === null ? null : createLearnings({ core, now: devNow, measure: email ? emailMeasure(email) : undefined });
+  const learningsCli = createLearningsCli({ core: need, learnings: () => learnings });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library() }) : null;
-  const editorCli = createEditorCli({ core: need, regulator: () => regulator });
+  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined }) : null;
+  const editorCli = createEditorCli({
+    core: need, regulator: () => regulator,
+    autorun: {
+      enabled: async (campaignId) => (await need().settings.resolve(campaignId, "editor.autoRun"))?.value === true,
+      spawn: async (prompt, campaignId) => { const id = await spawnAgentThread(bb, prompt); await assignThread(id, campaignId); return id; },
+      lastRun: async (key) => (await bb.storage.kv.get<number>(key)) ?? null,
+      setLastRun: async (key, at) => { await bb.storage.kv.set(key, at); },
+    },
+  });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
   const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
   for (const p of email?.providers ?? []) {
@@ -537,24 +569,37 @@ export default async function plugin(bb: BbPluginApi) {
       return entry;
     },
     calendar_decide: async ({ id, decision }) => {
-      const entry = await need().calendar.decide(id, decision);
+      const entry = await need().calendar.decide(id, decision, "ui");
       await changed();
       return entry;
     },
     calendar_update: async ({ id, ...patch }) => {
-      const entry = await need().calendar.update(id, patch);
+      const entry = await need().calendar.update(id, patch, "ui");
       await changed();
       return entry;
     },
     calendar_unapprove: async ({ id }) => {
-      const entry = await need().calendar.unapprove(id);
+      const entry = await need().calendar.unapprove(id, "ui");
       await changed();
       return entry;
     },
-    calendar_request_changes: async ({ id, note }) => {
-      const entry = await need().calendar.requestChanges(id, note);
+    calendar_request_changes: async ({ id, note, reason }) => {
+      const entry = await need().calendar.requestChanges(id, note, { actor: "ui", reason: reason ?? null });
       await changed();
       return entry;
+    },
+    entry_learnings: async ({ id }) => {
+      if (!learnings) throw new Error("Not configured");
+      return learnings.forEntry(id);
+    },
+    learnings_list: async ({ campaignId }) => {
+      if (!learnings) throw new Error("Not configured");
+      return { learnings: (await learnings.list(campaignId)).map((l) => ({ id: l.id, scope: l.scope, kind: l.kind, evidence: l.evidence, result: l.result, statement: l.statement, channel: l.channel, status: l.status, effectiveStatus: l.effectiveStatus, contrary: l.contrary, createdBy: l.createdBy, confirmedBy: l.confirmedBy, decidedAt: l.decidedAt, sourceIds: l.sourceIds })) };
+    },
+    learning_set_status: async ({ id, action }) => {
+      if (!learnings) throw new Error("Not configured");
+      if (action === "confirm") await learnings.confirm(id, "ui"); else await learnings.retire(id, "ui");
+      return { ok: true };
     },
     thread_campaigns: async ({ threadIds }) => ({ map: await threadCampaigns(threadIds) }),
     thread_set_campaign: async ({ threadId, campaignId }) => {
@@ -720,21 +765,37 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  /** `--brief-id`, `--applies`, `--tests`, `--tag` of calendar add/edit: what the entry was written from (learnings). */
+  async function attachFromArgs(entryId: string, args: string[]) {
+    const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
+    const input = { briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") };
+    if (!learnings || Object.values(input).every((v) => v === undefined)) return null;
+    return learnings.attach(entryId, { ...input, tagSource: val(args, "--as") === "ui" ? "human" : "agent" });
+  }
+
   const usage = [
     "Usage:",
     "  bb brandwise campaign channel set <channel> <key>=<value>... | unset <channel> | list [--campaign <c>]   (where the campaign publishes, e.g. telegram chatId=@mychannel; a parent campaign's target applies when the campaign has none)",
     "  bb brandwise campaign list|add <name> --kind <always_on|campaign> [--parent <campaign>] [--from <date>] [--to <date>]",
     "  bb brandwise campaign assign <thread-id> <campaign> | campaign unassign <thread-id>   (link a bb thread to a campaign)",
     "  bb brandwise calendar list [--campaign <c>]",
-    "  bb brandwise calendar add <title> --channel <c> --at <ISO date> --tier <1|2|3> [--campaign <c>] [--asset <id>] [--body <text>] [--link <url>]",
-    "  bb brandwise calendar edit <id> [--title <t>] [--body <text>] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <id>]",
-    "  bb brandwise calendar request-changes <id> <note>",
+    "  bb brandwise calendar add <title> --channel <c> --at <ISO date> --tier <1|2|3> [--campaign <c>] [--asset <id>] [--body <text>] [--link <url>] [--brief-id <id> --applies <ids> --tests <id> --tag key=value,...]   (cite the brief you wrote from and the learnings you apply)",
+    "  bb brandwise calendar edit <id> [--title <t>] [--body <text>] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <id>] [--brief-id ... --applies ... --tests ... --tag ...]",
+    "  bb brandwise calendar request-changes <id> <note> [--reason claims|facts|tone|brand|visual|legal|typo|offer|other]",
+    "  bb brandwise calendar history <id>   (every action on the entry: who, when, the send-back notes)",
+    "  bb brandwise brief --campaign <c> [--channel <ch>] [--at <ISO>]   (read before writing: learnings in force, what not to re-test, candidates, the reviewer's rules, explore or exploit slot)",
+    "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
+    "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
+    "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
+    "  bb brandwise learnings confirm|retire <id>   (a person's commands)",
+    "  bb brandwise learnings mine [--campaign <c>]   (E2 patterns over matured entries; run weekly by a bb automation, silent when nothing is new)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
-    "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on e-mail; the rails judge, nobody can overrule)",
+    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" | evaluate <id> | backfill   (A/B on e-mail; the rails judge, nobody can overrule; a lever with a standing null result at this size is refused)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
-    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] | complete <id> [--result '<json>']",
+    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] [--brief-id <id>] [--applies <ids>] [--tests <id>] | complete <id> [--result '<json>']",
+    "  bb brandwise editor autorun   (run by a bb automation: starts the editor or the author only on campaigns with editor.autoRun and only when they have work; silent otherwise)",
     "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
     "  bb brandwise sim status | advance <90m|24h|2d> | reset   (development clock for the simulated provider)",
     "  bb brandwise email brand [set --brand '<json>' | --file <f>] | component [set <name> --file <full path of an .mjml file> or --mjml '<inline mjml>' | remove <name>]   (the client's brand kit and MJML components, inherited by child campaigns; add --campaign <c>)",
@@ -769,7 +830,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -1053,9 +1114,10 @@ export default async function plugin(bb: BbPluginApi) {
           const at = val(args, "--at");
           const tier = Number(val(args, "--tier"));
           if (!title || !channel || !at || ![1, 2, 3].includes(tier)) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: "cli" });
+          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: val(args, "--as") ?? "cli" });
+          const linked = await attachFromArgs(e.id, args);
           await changed();
-          return reply(e, `Added ${fmtEntry(e)}`);
+          return reply({ ...e, learnings: linked }, `Added ${fmtEntry(e)}${linked ? `\nwritten from brief ${linked.briefId ?? "none"}; applies ${linked.applies.join(", ") || "nothing"}; tests ${linked.tests.join(", ") || "nothing"}` : "\nNo --brief-id: run `bb brandwise brief` before writing and cite what you apply (the reviewer sees it)."}`);
         }
         if (area === "calendar" && action === "edit") {
           const id = positional(args.slice(2))[0];
@@ -1064,31 +1126,40 @@ export default async function plugin(bb: BbPluginApi) {
           const e = await c.calendar.update(id, {
             title: val(args, "--title"), body: val(args, "--body"), link: val(args, "--link"), channel: val(args, "--channel"),
             scheduledAt: at, assetId: val(args, "--asset"),
-          });
+          }, val(args, "--as") ?? "cli");
+          await attachFromArgs(e.id, args);
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "unapprove") {
           const id = positional(args.slice(2))[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.unapprove(id);
+          const e = await c.calendar.unapprove(id, val(args, "--as") ?? "cli");
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "request-changes") {
           const [id, ...note] = positional(args.slice(2));
           if (!id || note.length === 0) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.requestChanges(id, note.join(" "));
+          const e = await c.calendar.requestChanges(id, note.join(" "), { actor: val(args, "--as") ?? "cli", reason: val(args, "--reason") ?? null });
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && (action === "approve" || action === "cancel")) {
           const id = rest[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.decide(id, action);
+          const e = await c.calendar.decide(id, action, val(args, "--as") ?? "cli");
           await changed();
           return reply(e, fmtEntry(e));
         }
+        if (area === "calendar" && action === "history") {
+          const id = rest[0];
+          if (!id) return { exitCode: 1, stderr: usage };
+          const h = await c.calendar.history(id);
+          return reply(h, h.map((x) => `${x.at.slice(0, 16)}  ${x.kind.padEnd(17)} ${x.actor.padEnd(10)} ${x.fromStatus ?? ""} -> ${x.toStatus ?? ""}${x.reason ? `  [${x.reason}]` : ""}${x.note ? `  ${x.note}` : ""}`).join("\n") || "No history.");
+        }
+        if (area === "brief") return learningsCli.brief(args, { val, positional, reply, usage });
+        if (area === "learnings") return learningsCli.learnings(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "add") {
           const file = positional(args.slice(2))[0];
           if (!file) return { exitCode: 1, stderr: usage };

@@ -8,6 +8,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import pg from "pg";
 import { createSettings, type Scope, type SettingValue } from "./settings.ts";
 import { SETTING_FIELDS, providerById, type ProviderConfig } from "./providers/index.ts";
+import { deriveAttributes } from "./learnings/attributes.ts";
 
 export { PROVIDERS, SETTING_FIELDS, providerById } from "./providers/index.ts";
 export type { Auth, GenSpec, Job, Provider, ProviderConfig } from "./providers/index.ts";
@@ -44,7 +45,11 @@ export type Status = (typeof STATUSES)[number];
 export type Tier = 1 | 2 | 3;
 
 export type Campaign = { id: string; parentId: string | null; rootId: string; name: string; kind: "always_on" | "campaign"; startsAt: string | null; endsAt: string | null };
-export type CalendarEntry = { id: string; campaignId: string; campaignName: string; title: string; channel: string; scheduledAt: string; tier: Tier; status: Status; assetId: string | null; createdBy: string; body: string; link: string | null; reviewNote: string | null; attempts: number; externalId: string | null; externalUrl: string | null; error: string | null };
+export type CalendarEntry = { id: string; campaignId: string; campaignName: string; title: string; channel: string; scheduledAt: string; tier: Tier; status: Status; assetId: string | null; createdBy: string; body: string; link: string | null; reviewNote: string | null; attempts: number; externalId: string | null; externalUrl: string | null; error: string | null; briefId: string | null; approvedAt: string | null; approvedBy: string | null };
+/** Why an entry was sent back: a closed list, so production metrics and reviewer preferences can be counted. */
+export const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "typo", "offer", "other"] as const;
+export type ReviewReason = (typeof REVIEW_REASONS)[number];
+export type EntryEvent = { id: number; entryId: string; kind: string; actor: string; fromStatus: string | null; toStatus: string | null; note: string | null; reason: ReviewReason | null; data: unknown; at: string };
 export type Asset = { id: string; campaignId: string; name: string; kind: string; role: string; origin: string; storageKey: string; sha256: string; mime: string; bytes: number; width: number | null; height: number | null; status: string; aiGenerated: boolean; provenance: unknown; createdBy: string; createdAt: string };
 
 const MIME: Record<string, string> = {
@@ -73,7 +78,7 @@ const assertActionable = (e: CalendarEntry, now = Date.now()) => {
 };
 
 const campaignFrom = (r: any): Campaign => ({ id: r.id, parentId: r.parent_id, rootId: r.root_id, name: r.name, kind: r.kind, startsAt: r.starts_at ?? null, endsAt: r.ends_at ?? null });
-const entryFrom = (r: any): CalendarEntry => ({ id: r.id, campaignId: r.campaign_id, campaignName: r.campaign_name, title: r.title, channel: r.channel, scheduledAt: new Date(r.scheduled_at).toISOString(), tier: r.tier, status: r.status, assetId: r.asset_id, createdBy: r.created_by, body: r.body, link: r.link, reviewNote: r.review_note, attempts: r.attempts, externalId: r.external_id, externalUrl: r.external_url, error: r.error });
+const entryFrom = (r: any): CalendarEntry => ({ id: r.id, campaignId: r.campaign_id, campaignName: r.campaign_name, title: r.title, channel: r.channel, scheduledAt: new Date(r.scheduled_at).toISOString(), tier: r.tier, status: r.status, assetId: r.asset_id, createdBy: r.created_by, body: r.body, link: r.link, reviewNote: r.review_note, attempts: r.attempts, externalId: r.external_id, externalUrl: r.external_url, error: r.error, briefId: r.brief_id ?? null, approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : null, approvedBy: r.approved_by ?? null });
 const assetFrom = (r: any): Asset => ({ id: r.id, campaignId: r.campaign_id, name: r.name, kind: r.kind, role: r.role, origin: r.origin, storageKey: r.storage_key, sha256: r.sha256, mime: r.mime, bytes: Number(r.bytes), width: r.width, height: r.height, status: r.status, aiGenerated: r.ai_generated, provenance: r.provenance, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
 
 export function createCore(cfg: CoreConfig) {
@@ -122,6 +127,19 @@ export function createCore(cfg: CoreConfig) {
     },
   };
 
+  /** One row per action on an entry (docs/analytics.md D4): send-back notes are kept, approvals say who and when. */
+  const event = (entryId: string, kind: string, actor: string, from: string | null, to: string | null, extra: { note?: string | null; reason?: string | null; data?: unknown } = {}) =>
+    q("insert into entry_event (entry_id, kind, actor, from_status, to_status, note, reason, data) values ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [entryId, kind, actor, from, to, extra.note ?? null, extra.reason ?? null, extra.data === undefined ? null : JSON.stringify(extra.data)]);
+  /** Attributes code can see in the entry; refreshed on every add and content edit. */
+  const derive = async (e: CalendarEntry) => {
+    const assetKind = e.assetId ? (await q("select kind from asset where id = $1", [e.assetId]))[0]?.kind ?? null : null;
+    for (const [k, v] of Object.entries(deriveAttributes({ ...e, assetKind }))) {
+      await q(`insert into entry_attribute (entry_id, key, value, source) values ($1,$2,$3,'derived')
+               on conflict (entry_id, key) do update set value = excluded.value, source = 'derived'`, [e.id, k, v]);
+    }
+  };
+
   const calendar = {
     async list(campaignId?: string): Promise<CalendarEntry[]> {
       const rows = await q(
@@ -137,44 +155,53 @@ export function createCore(cfg: CoreConfig) {
       // tier 1 passes automatically, tier 2 and 3 wait for a human (docs/architecture.md)
       const status: Status = input.tier === 1 ? "approved" : "pending_approval";
       const id = (await q(
-        `insert into content_calendar (campaign_id, title, channel, scheduled_at, tier, status, asset_id, created_by, body, link)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+        `insert into content_calendar (campaign_id, title, channel, scheduled_at, tier, status, asset_id, created_by, body, link, approved_at, approved_by)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, case when $6 = 'approved' then now() end, case when $6 = 'approved' then 'auto' end) returning id`,
         [input.campaignId, input.title, input.channel, new Date(input.scheduledAt).toISOString(), input.tier, status, input.assetId ?? null, input.createdBy ?? "unknown", input.body ?? "", link],
       ))[0].id;
-      return (await calendar.get(id))!;
+      await event(id, "created", input.createdBy ?? "unknown", null, status);
+      const entry = (await calendar.get(id))!;
+      await derive(entry);
+      return entry;
     },
     async get(id: string): Promise<CalendarEntry | null> {
       const rows = await q("select c.*, p.name as campaign_name from content_calendar c join campaign p on p.id = c.campaign_id where c.id = $1", [id]);
       return rows[0] ? entryFrom(rows[0]) : null;
     },
-    async decide(id: string, decision: "approve" | "cancel"): Promise<CalendarEntry> {
+    async decide(id: string, decision: "approve" | "cancel", actor = "unknown"): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
       if (decision === "approve" && entry.status !== "pending_approval") throw new Error(`Entry ${id} is ${entry.status}, only pending_approval can be approved`);
-      await q("update content_calendar set status = $2 where id = $1", [id, decision === "approve" ? "approved" : "cancelled"]);
+      const to = decision === "approve" ? "approved" : "cancelled";
+      await q(`update content_calendar set status = $2, approved_at = case when $2 = 'approved' then now() else approved_at end,
+                 approved_by = case when $2 = 'approved' then $3 else approved_by end where id = $1`, [id, to, actor]);
+      await event(id, to, actor, entry.status, to);
       return (await calendar.get(id))!;
     },
     /**
      * Take an upcoming approved entry back to pending_approval. Approval stays a manual step: nothing re-approves it,
      * not even tier 1 (that is automatic only when the entry is created).
      */
-    async unapprove(id: string): Promise<CalendarEntry> {
+    async unapprove(id: string, actor = "unknown"): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
       if (entry.status !== "approved") throw new Error(`Entry ${id} is ${entry.status}, only approved entries can go back to pending_approval`);
-      await q("update content_calendar set status = 'pending_approval' where id = $1", [id]);
+      await q("update content_calendar set status = 'pending_approval', approved_at = null, approved_by = null where id = $1", [id]);
+      await event(id, "unapproved", actor, entry.status, "pending_approval");
       return (await calendar.get(id))!;
     },
-    /** Send a pending entry back to its author with a note. Any later edit resubmits it. */
-    async requestChanges(id: string, note: string): Promise<CalendarEntry> {
+    /** Send a pending entry back to its author with a note (and, best, a reason from REVIEW_REASONS). Any later edit resubmits it. */
+    async requestChanges(id: string, note: string, opts: { actor?: string; reason?: string | null } = {}): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
       if (entry.status !== "pending_approval") throw new Error(`Entry ${id} is ${entry.status}, only pending_approval can be sent back`);
       if (note.trim() === "") throw new Error("Say what should change (note is empty)");
+      if (opts.reason && !(REVIEW_REASONS as readonly string[]).includes(opts.reason)) throw new Error(`Unknown reason "${opts.reason}" (use ${REVIEW_REASONS.join(", ")})`);
       await q("update content_calendar set status = 'changes_requested', review_note = $2 where id = $1", [id, note.trim()]);
+      await event(id, "changes_requested", opts.actor ?? "unknown", entry.status, "changes_requested", { note: note.trim(), reason: opts.reason ?? null });
       return (await calendar.get(id))!;
     },
     /**
@@ -182,7 +209,7 @@ export function createCore(cfg: CoreConfig) {
      * (tier 2 and 3) sends it back to pending_approval; moving it in time keeps the approval. An edit of an entry
      * that was sent back resubmits it. Frozen entries (see assertActionable) cannot be edited.
      */
-    async update(id: string, patch: { title?: string; body?: string; link?: string | null; channel?: string; scheduledAt?: string; assetId?: string | null }): Promise<CalendarEntry> {
+    async update(id: string, patch: { title?: string; body?: string; link?: string | null; channel?: string; scheduledAt?: string; assetId?: string | null }, actor = "unknown"): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
@@ -196,17 +223,33 @@ export function createCore(cfg: CoreConfig) {
       };
       if (next.title.trim() === "" || next.channel.trim() === "") throw new Error("Title and channel cannot be empty");
       if (Number.isNaN(Date.parse(next.scheduledAt))) throw new Error(`Invalid date: ${patch.scheduledAt}`);
-      const contentChanged = next.title !== entry.title || next.body !== entry.body || next.link !== entry.link || next.channel !== entry.channel || next.assetId !== entry.assetId;
-      const timeChanged = next.scheduledAt !== entry.scheduledAt;
+      const changed = (["title", "body", "link", "channel", "assetId", "scheduledAt"] as const).filter((k) => next[k] !== entry[k]);
+      const contentChanged = changed.some((k) => k !== "scheduledAt");
+      const timeChanged = changed.includes("scheduledAt");
       let status: Status = entry.status;
       if (entry.status === "changes_requested" && (contentChanged || timeChanged)) status = "pending_approval";
       else if (contentChanged && entry.tier > 1 && (entry.status === "approved" || entry.status === "scheduled")) status = "pending_approval";
       await q(
         `update content_calendar set title = $2, body = $3, link = $4, channel = $5, asset_id = $6, scheduled_at = $7, status = $8,
-           review_note = case when $8 = 'changes_requested' then review_note else null end where id = $1`,
+           review_note = case when $8 = 'changes_requested' then review_note else null end,
+           approved_at = case when $8 = 'pending_approval' then null else approved_at end,
+           approved_by = case when $8 = 'pending_approval' then null else approved_by end where id = $1`,
         [id, next.title, next.body, next.link, next.channel, next.assetId, next.scheduledAt, status],
       );
-      return (await calendar.get(id))!;
+      if (changed.length > 0) await event(id, "edited", actor, entry.status, status, { data: { fields: changed } });
+      const updated = (await calendar.get(id))!;
+      if (contentChanged || timeChanged) await derive(updated);
+      return updated;
+    },
+    /** Every action on the entry, oldest first. */
+    async history(id: string): Promise<EntryEvent[]> {
+      return (await q("select * from entry_event where entry_id = $1 order by at, id", [id])).map((r: any) => ({
+        id: Number(r.id), entryId: r.entry_id, kind: r.kind, actor: r.actor, fromStatus: r.from_status, toStatus: r.to_status, note: r.note, reason: r.reason, data: r.data, at: new Date(r.at).toISOString(),
+      }));
+    },
+    /** The entry's attributes (derived by code, tagged by an agent or a person). */
+    async attributes(id: string): Promise<Record<string, { value: string; source: string }>> {
+      return Object.fromEntries((await q("select key, value, source from entry_attribute where entry_id = $1 order by key", [id])).map((r: any) => [r.key, { value: r.value, source: r.source }]));
     },
   };
 
@@ -261,6 +304,7 @@ export function createCore(cfg: CoreConfig) {
     },
     async markPublished(id: string, result: { externalId: string; url?: string }): Promise<void> {
       await q("update content_calendar set status = 'published', external_id = $2, external_url = $3, error = null where id = $1", [id, result.externalId, result.url ?? null]);
+      await event(id, "published", "scheduler", "publishing", "published", { data: { externalId: result.externalId } });
     },
     /** Retry later with a growing delay (2, 4 min), and `failed` after MAX_ATTEMPTS. Returns the new status. */
     async markFailed(id: string, error: string): Promise<"approved" | "failed"> {
@@ -271,11 +315,13 @@ export function createCore(cfg: CoreConfig) {
          where id = $1 returning status`,
         [id, error.slice(0, 500), publishing.MAX_ATTEMPTS],
       ))[0];
+      if (row.status === "failed") await event(id, "failed", "scheduler", "publishing", "failed", { note: error.slice(0, 500) });
       return row.status;
     },
     /** No connector for the channel: the entry waits for a human to publish it by hand. */
     async markManual(id: string, reason: string): Promise<void> {
       await q("update content_calendar set status = 'needs_manual', error = $2 where id = $1", [id, reason]);
+      await event(id, "needs_manual", "scheduler", "publishing", "needs_manual", { note: reason });
     },
   };
 
