@@ -16,7 +16,8 @@ run("a signed lead is traced to its entry once; a qualification later counts as 
   const prefix = `test-${Date.now()}-conv`;
   await migrate(process.env.DATABASE_URL!);
   const core = createCore(configFromEnv());
-  const conv = createConversions({ core, salt: "conv-test", secretKey: randomBytes(32).toString("base64"), now: async () => new Date() });
+  const key = randomBytes(32).toString("base64");
+  const conv = createConversions({ core, salt: "conv-test", secretKey: key, now: async () => new Date() });
   const econ = createEconomics({ core, now: async () => new Date(), conversions: conv });
   try {
     const base = await core.campaigns.add({ name: `${prefix}-base`, kind: "always_on" });
@@ -34,6 +35,10 @@ run("a signed lead is traced to its entry once; a qualification later counts as 
     };
     const lead = { kind: "lead", id: `${prefix}-L1`, occurredAt: new Date().toISOString(), email: "Ann@Example.com", utm: { utm_content: entry.id } };
     assert.equal((await post(lead, "wrong")).status, 401, "a bad signature stores nothing");
+    // the development clock may run days ahead (sim advance): a real site signs with real time and must still get in
+    const ahead = createConversions({ core, salt: "conv-test", secretKey: key, now: async () => new Date(Date.now() + 73 * 3_600_000) });
+    const realBody = JSON.stringify({ kind: "lead", id: `${prefix}-L0`, occurredAt: new Date().toISOString() });
+    assert.equal((await ahead.webhook(source.id, { headers: { "x-brandwise-signature": sign(secret!, realBody, Math.floor(Date.now() / 1000)) }, body: realBody })).status, 200);
     assert.deepEqual((await post(lead)).result, { received: 1, created: 1, updated: 0, duplicates: 0 });
     assert.deepEqual((await post(lead)).result, { received: 1, created: 0, updated: 0, duplicates: 1 }, "the same payload twice is one lead");
     assert.equal(await conv.leadsFor(entry.id, new Date()), 1);

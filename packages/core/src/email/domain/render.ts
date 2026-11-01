@@ -29,7 +29,11 @@ export function tagLinks(html: string, ctx: UtmContext, skip: string[] = []): st
 
 /** Bare http(s) URLs in plain text (an e-mail or a post) get the UTM parameters too. */
 export function tagText(text: string, ctx: UtmContext): string {
-  return text.replace(/https?:\/\/[^\s<>"')]+/g, (url) => { try { return withUtm(url, ctx); } catch { return url; } });
+  // punctuation that ends a sentence ("see https://shop.com/sale.") is not part of the link
+  return text.replace(/https?:\/\/[^\s<>"')]+/g, (match) => {
+    const url = match.replace(/[.,;:!?]+$/, ""), tail = match.slice(url.length);
+    try { return withUtm(url, ctx) + tail; } catch { return match; }
+  });
 }
 
 /**

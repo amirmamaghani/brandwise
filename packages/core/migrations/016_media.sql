@@ -14,6 +14,7 @@ create table media_order (
   payment      text,                                            -- the payment method of that target (what the person approved)
   prepaid      boolean not null default false,                  -- the account is prepaid or invoiced: no payment step
   external_id  text,
+  started_at   timestamptz,                                     -- when it went live: its days run from here
   payment_ref  text,                                            -- the payment's reference; the token itself is never stored
   status       text not null default 'draft' check (status in ('draft', 'live', 'paused', 'ended', 'refused')),
   created_by   text not null,

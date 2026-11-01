@@ -119,6 +119,8 @@ test("guards: the 0.3 % ceiling, complaints clearly above 0.1 %, a significantly
   const blind = judge(arm({ measured: { unsubscribes: false } }), arm({ clicks: 60, unsubscribes: 0, measured: { unsubscribes: false } }), at(48), R);
   assert.equal(blind.verdict, "B");
   assert.ok(blind.reasons.some((r) => /unsubscribe guard unavailable/.test(r)), "an unmeasured guard is said, not read as 0 %");
+  const tinyB = judge(arm({ clicks: 90, complaints: 8 }), arm({ delivered: 50, clicks: 2 }), at(48), R);
+  assert.deepEqual([tinyB.verdict, /too few delivered .* to be called safe/.test(tinyB.reasons[0])], ["inconclusive", true], "an unsafe control does not make a tiny challenger safe");
   const early = judgeSeries([{ a: arm(), b: arm({ clicks: 90, complaints: 8 }) }], 4, at(48), R);
   assert.equal(early.verdict, "A", "a broken guard stops a series at once");
 });

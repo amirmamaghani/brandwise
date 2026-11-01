@@ -133,6 +133,8 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (metric === "lead_rate" && (!deps.conversions || (await deps.conversions.leadsFor(a.id, at)) === null)) throw new Error("Cannot start a lead experiment: no conversion source measures this brand's leads");
         const power = (await signals(input.campaignId)).power;
         const perArm = power?.deliveredPerArm ?? null, rate = metric === "lead_rate" ? power?.leadRate ?? null : power?.clickRate ?? null;
+        // a lead experiment cannot be sized without a measured lead rate: it would start blind and almost surely end inconclusive
+        if (metric === "lead_rate" && !(rate && rate > 0)) throw new Error("Cannot start a lead experiment: no lead rate is measured yet (leads of earlier sends arrive within 72 h); decide on clicks, the lead guard still applies");
         const mde = perArm && rate ? minDetectableLift(rate, perArm * rounds) : null;
         if (expected !== null && perArm && rate) {
           if (mde === null || mde > expected) {

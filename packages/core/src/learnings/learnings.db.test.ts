@@ -149,7 +149,7 @@ run("contrary outcomes against the brand baseline doubt a learning; the miner fi
     for (let i = 0; i < 5; i++) {
       const e = await core.calendar.add({ campaignId: child.id, title: `Applied ${i}`, channel: "email", scheduledAt: future(400 + i), tier: 1, body: "x" });
       await learnings.attach(e.id, { applies: [turned[0].id] });
-      outcomes.set(e.id, { rate: 0.06, low: 0.05, high: 0.07, delivered: 1000 });   // "worse" said numbers hurt; these did far better
+      outcomes.set(e.id, { rate: 0.02, low: 0.015, high: 0.025, delivered: 1000 });   // they followed "numbers hurt" (no number) and did clearly worse
       applied.push(e.id);
     }
     const l = (await learnings.list(child.id)).find((x) => x.id === turned[0].id)!;

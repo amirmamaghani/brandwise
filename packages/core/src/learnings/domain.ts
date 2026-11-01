@@ -114,10 +114,12 @@ export function isExplore(campaignId: string, day: string, share: number): boole
   return h.readUInt32BE(0) / 2 ** 32 < share;
 }
 
-/** Applying a learning that says `to` is better, an entry that did clearly worse than the baseline counts against the learning. */
+/**
+ * An entry that follows a learning (uses `to` when it is better, keeps `from` when `to` is worse) and does clearly worse than the brand's
+ * baseline counts against it. "unsafe" learnings are about complaints and unsubscribes, which a click outcome cannot contradict.
+ */
 export function isContrary(l: Pick<Learning, "result">, outcome: { rate: number; high: number; low: number; baseline: number }): boolean {
-  if (l.result === "better") return outcome.high < outcome.baseline;
-  if (l.result === "worse" || l.result === "unsafe") return outcome.low > outcome.baseline;
+  if (l.result === "better" || l.result === "worse") return outcome.high < outcome.baseline;
   return false;
 }
 

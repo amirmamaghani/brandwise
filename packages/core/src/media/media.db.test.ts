@@ -89,7 +89,7 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
     const { source, secret } = await conversions.sources.create({ campaignId: base.id, name: "Site form", adapter: "generic", createdBy: "ui" });
     for (const id of ["a", "b"]) {
       const body = JSON.stringify({ kind: "lead", id: `${prefix}-${id}`, occurredAt: new Date(clock.t).toISOString(), utm: { utm_content: first.entry.id } });
-      await conversions.webhook(source.id, { headers: { "x-brandwise-signature": sign(secret!, body, Math.floor(clock.t / 1000)) }, body });
+      await conversions.webhook(source.id, { headers: { "x-brandwise-signature": sign(secret!, body, Math.floor(Date.now() / 1000)) }, body });   // a site signs with real time
     }
     const [ad] = await media.results(child.id);
     outputs.push(ad);
@@ -98,8 +98,32 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
     const costs = await economics.costs(child.id);
     assert.equal(costs.rows.find((r) => r.kind === "media")?.money, 30, "media spend is in the campaign's costs");
 
+    // the ad went live today: its days run from now, not from when the draft was made
+    assert.ok((await media.order(first.entry.id))?.startedAt, "go-live time is kept");
+    // a budget change is checked in place of the order it changes: 70 -> 175 over 7 days is 25 a day, within the daily 30
+    // (counted on top of the order it would be 10 + 25 = 35 and refused)
+    limits.maxPerOrder = 300;
+    const raise = await media.create({ campaignId: child.id, name: "More", body: "x", action: "budget_change", budget: 175, days: 7, orderOf: first.entry.id, at, createdBy: "agent" });
+    await assert.rejects(media.create({ campaignId: child.id, name: "Too much", body: "x", action: "budget_change", budget: 280, days: 7, orderOf: first.entry.id, at, createdBy: "agent" }), /daily limit/, "40 a day is over 30");
+    // an approved ad moved in time goes back to a person
+    await core.calendar.decide(raise.entry.id, "approve", "ui");
+    const moved = await core.calendar.update(raise.entry.id, { scheduledAt: new Date(Date.parse(at) + 3_600_000).toISOString() }, "cli:agent");
+    assert.deepEqual([moved.status, moved.approvedBy], ["pending_approval", null]);
+    await core.calendar.decide(raise.entry.id, "approve", "ui");
+
     await media.pause(first.entry.id);
     assert.equal((await media.order(first.entry.id))?.status, "paused");
+    limits.maxPerOrder = 100;
+    // the person paused the ad after approving the raise: the raise neither changes the budget nor pays
+    await core.pool.query("update content_calendar set scheduled_at = now() - interval '1 minute' where id = $1", [raise.entry.id]);
+    const charges = payments.charges.length;
+    assert.match((await due()).find((o) => o.id === raise.entry.id)!.detail, /is paused: its budget is not changed and nothing is paid/);
+    assert.equal(payments.charges.length, charges);
+    const withoutPlatform = createMedia({ core, economics, conversions, buyers: [], payments: [], limits: async () => ({ ...limits }), now });
+    await core.pool.query("update media_order set status = 'live' where entry_id = $1", [first.entry.id]);
+    await assert.rejects(withoutPlatform.pause(first.entry.id), /pause it on the platform/, "never marked paused while it keeps running");
+    assert.equal((await media.order(first.entry.id))?.status, "live");
+    await media.pause(first.entry.id);
     limits.monthlyLimit = 150;
     await assert.rejects(order(100, 10), /monthly limit/, "a paused order still counts this month: 70 + 100 is over 150");
     limits.monthlyLimit = 500;

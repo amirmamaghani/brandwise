@@ -142,13 +142,14 @@ export function createEconomics(deps: { core: Core; now: () => Promise<Date>; /*
       const agentEntries = async (cids: string[]) => Number((await store.q("select count(*) as n from content_calendar where campaign_id = any($1::uuid[]) and created_by <> 'ui' and created_at >= $2", [cids, w.since]))[0].n);
       const brandIds = (await family(root.id)).tree.map((c) => c.id);
       const [mine, all] = [await agentEntries(ids), await agentEntries(brandIds)];
-      const llm = prof?.llmMonthly !== undefined ? (all > 0 ? (prof.llmMonthly * w.months * mine) / all : 0) : null;
+      const llm = mine === 0 ? 0 : prof?.llmMonthly !== undefined ? (all > 0 ? (prof.llmMonthly * w.months * mine) / all : 0) : null;
       if (llm === null && mine > 0) needs.add("llmMonthly in the economics profile");
       const rows = [
         { kind: "gen", money: genMoney, detail: `${gens.length} generation(s), ${gens.reduce((t, g) => t + g.units, 0)} units` },
-        { kind: "media", money: sum("media"), detail: "stated spend" },
-        { kind: "human", money: prof?.hourlyRate !== undefined ? (minutes / 60) * prof.hourlyRate : null, detail: `${Math.round(minutes)} review minute(s)` },
-        { kind: "distribution", money: prof?.espPerThousand !== undefined ? (sent / 1000) * prof.espPerThousand : null, detail: `${sent} e-mail(s) sent` },
+        { kind: "media", money: sum("media"), detail: "reported by ad platforms and stated by a person" },
+        // nothing used costs nothing, priced or not: only rows with something to price can leave the total unknown
+        { kind: "human", money: minutes === 0 ? 0 : prof?.hourlyRate !== undefined ? (minutes / 60) * prof.hourlyRate : null, detail: `${Math.round(minutes)} review minute(s)` },
+        { kind: "distribution", money: sent === 0 ? 0 : prof?.espPerThousand !== undefined ? (sent / 1000) * prof.espPerThousand : null, detail: `${sent} e-mail(s) sent` },
         { kind: "llm", money: llm, detail: `${mine} of ${all} agent-written entries of the brand` },
         { kind: "incentive", money: sum("incentive"), detail: "stated" },
         ...(campaign.id === root.id ? [{ kind: "tool", money: (prof?.toolsMonthly ?? 0) * w.months + sum("tool"), detail: "period level only" }] : []),

@@ -439,7 +439,9 @@ function EntryLearnings({ entry }: { entry: CalendarEntry }) {
   const mediaBlock = mo ? (
     <div className="flex flex-col gap-0.5 rounded-md border border-amber-500/50 p-2 text-xs">
       <p><span className="font-medium">Paid media: {mo.action.replace("_", " ")}</span>, {mo.budget} {mo.currency} over {mo.days} day(s){mo.boostOf ? `, boosts ${mo.boostOf}` : ""} · {mo.status}{mo.platform ? ` on ${mo.platform}` : ""}{mo.payment ? `, paid with ${mo.payment}` : ""}</p>
-      <p className="text-muted-foreground">Approving lets the system spend this budget when its time comes. The brand's ads limits are checked again right before payment; the payment itself never passes through an agent.</p>
+      <p className="text-muted-foreground">{mo.status === "draft"
+        ? "Approving lets the system spend this budget when its time comes. The brand's ads limits are checked again right before payment; the payment itself never passes through an agent."
+        : "Bought as approved. Spend, leads and CPL are on Results > Paid."}</p>
     </div>
   ) : null;
   const exp = info.experiment;

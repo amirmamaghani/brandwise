@@ -65,8 +65,14 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     const bad = { exitCode: 1, stderr: usage };
     if (action === "autorun") return autorun(reg, io);
     if (!action || !["signals", "goals", "unfreeze", "experiments", "journal", "tasks"].includes(action)) return bad;   // no campaign lookup for a bare command
-    const b = await base(args, io);
     const asOf = val(args, "--as-of");
+    // an experiment id names its campaign: evaluate and add-round need no --campaign (the hint printed by propose has none)
+    if (action === "experiments" && (rest[0] === "evaluate" || rest[0] === "add-round") && rest[1] && !val(args, "--campaign")) {
+      const e = await reg.store.experiment(rest[1]);
+      if (!e) return { exitCode: 1, stderr: `No experiment ${rest[1]}` };
+      args = [...args, "--campaign", e.campaignId];
+    }
+    const b = await base(args, io);
 
     if (action === "signals") { const s = await reg.signals(b.id, asOf); return reply(s, fmtSignals(s)); }
     if (action === "goals") {

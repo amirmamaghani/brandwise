@@ -153,6 +153,7 @@ export function judgeSeries(rounds: Round[], plannedRounds: number, asOf: Date, 
   const guardA = brokenGuard(a, rails), guardB = brokenGuard(b, rails) ?? (a.delivered >= rails.minDeliveredPerArm && b.delivered >= rails.minDeliveredPerArm ? worseThanControl(a, b, rails) ?? leadGuard : null);
   if (guardA && guardB) return { verdict: "freeze", reasons: [`both arms break a guard: A ${guardA}; B ${guardB}`, ...notes], readyAt: null, stats };
   if (guardB) return { verdict: "A", reasons: [`B is unsafe: ${guardB}`, ...notes], readyAt: null, stats, leads: leadCheck };
+  if (guardA && b.delivered < rails.minDeliveredPerArm) return { verdict: "inconclusive", reasons: [`A is unsafe (${guardA}), but B has too few delivered (${b.delivered}, minimum ${rails.minDeliveredPerArm}) to be called safe`, ...notes], readyAt: null, stats };
   if (guardA) return { verdict: "B", reasons: [`A is unsafe (${guardA}), B is the safe arm`, ...notes], readyAt: null, stats };
   if (rounds.length < plannedRounds) return { verdict: "next_round", reasons: [`round ${rounds.length} of ${plannedRounds} is mature: send the next pair with the same change (no verdict before round ${plannedRounds})`, ...notes], readyAt: null, stats: null };
   const small = [["A", a], ["B", b]].filter(([, arm]) => (arm as ArmData).delivered < rails.minDeliveredPerArm).map(([n]) => n);

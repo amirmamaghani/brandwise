@@ -86,7 +86,8 @@ export function createConversions(deps: { core: Core; salt: string; /** the plug
       if (!src || !src.secret_sealed || !deps.secretKey) return { ok: false as const, status: 404 };
       const secret = open(deps.secretKey, src.secret_sealed);
       const header = req.headers["x-brandwise-signature"] ?? req.headers["X-BrandWise-Signature"];
-      if (!verifySignature(header, req.body, secret, Math.floor((await deps.now()).getTime() / 1000))) return { ok: false as const, status: 401 };
+      // freshness of a real network call is real time, never the development clock (which `sim advance` moves)
+      if (!verifySignature(header, req.body, secret, Math.floor(Date.now() / 1000))) return { ok: false as const, status: 401 };
       return { ok: true as const, status: 200, result: await ingest(sourceId, parseGeneric(req.body)) };
     },
     /** A person's action: a CSV export of leads or orders, mapped column by column. */

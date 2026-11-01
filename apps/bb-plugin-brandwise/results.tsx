@@ -71,7 +71,7 @@ function LearningsTab({ campaigns }: { campaigns: Campaign[] }) {
                   <div className="min-w-0 flex-1">
                     <p>{l.statement}</p>
                     <p className="text-xs text-muted-foreground">
-                      {l.id} · {l.scope}{l.channel ? ` · ${l.channel}` : ""} · {l.decidedAt.slice(0, 10)} · by {l.createdBy}
+                      {l.id} · {l.scope}{l.channel ? ` · ${l.channel}` : ""} · {l.decidedAt.slice(0, 10)} · by {l.createdBy}{l.confirmedBy ? `, confirmed by ${l.confirmedBy}` : ""}
                       {l.contrary > 0 ? ` · ${l.contrary} contrary application(s)` : ""}
                       {" · "}<span className={cn(STATUS_TONE[l.effectiveStatus])}>{l.effectiveStatus.replace("_", " ")}</span>
                     </p>

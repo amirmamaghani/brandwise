@@ -13,8 +13,8 @@ export type { MediaBuyer, PaymentProvider, Limits } from "./domain.ts";
 export { mockBuyer, mockPayments } from "./adapters/mock.ts";
 
 const DAY = 86_400_000;
-export type OrderRow = { entryId: string; action: "media_buy" | "boost" | "budget_change"; budget: number; currency: string; days: number; objective: string; boostOf: string | null; orderOf: string | null; platform: string | null; payment: string | null; prepaid: boolean; externalId: string | null; paymentRef: string | null; status: string; createdBy: string; createdAt: string };
-const orderFrom = (r: any): OrderRow => ({ entryId: r.entry_id, action: r.action, budget: Number(r.budget), currency: r.currency, days: r.days, objective: r.objective, boostOf: r.boost_of, orderOf: r.order_of, platform: r.platform, payment: r.payment ?? null, prepaid: r.prepaid === true, externalId: r.external_id, paymentRef: r.payment_ref, status: r.status, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
+export type OrderRow = { entryId: string; action: "media_buy" | "boost" | "budget_change"; budget: number; currency: string; days: number; objective: string; boostOf: string | null; orderOf: string | null; platform: string | null; payment: string | null; prepaid: boolean; externalId: string | null; startedAt: string | null; paymentRef: string | null; status: string; createdBy: string; createdAt: string };
+const orderFrom = (r: any): OrderRow => ({ entryId: r.entry_id, action: r.action, budget: Number(r.budget), currency: r.currency, days: r.days, objective: r.objective, boostOf: r.boost_of, orderOf: r.order_of, platform: r.platform, payment: r.payment ?? null, prepaid: r.prepaid === true, externalId: r.external_id, startedAt: r.started_at ? new Date(r.started_at).toISOString() : null, paymentRef: r.payment_ref, status: r.status, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
 
 export function createMedia(deps: {
   core: Core; economics: Economics; conversions?: Conversions; buyers: MediaBuyer[]; payments: PaymentProvider[];
@@ -31,7 +31,7 @@ export function createMedia(deps: {
    * scheduled this month whatever became of it (live, paused, ended), or its actual media spend if that is more; only refused orders and
    * cancelled or never-bought entries are left out. A pending budget change commits its increase; an executed one lives in its order.
    */
-  async function committed(campaignId: string, except?: string) {
+  async function committed(campaignId: string, except: string[] = []) {
     const all = await core.campaigns.list();
     const c = all.find((x) => x.id === campaignId);
     const ids = all.filter((x) => x.rootId === (c?.rootId ?? campaignId)).map((x) => x.id);
@@ -40,7 +40,7 @@ export function createMedia(deps: {
       `select o.*, e.scheduled_at, e.status as entry_status, prev.budget as prev_budget,
               (select coalesce(sum(amount), 0) from cost_entry ce where ce.kind = 'media' and ce.entry_id = o.entry_id) as spent
        from media_order o join content_calendar e on e.id = o.entry_id left join media_order prev on prev.entry_id = o.order_of
-       where e.campaign_id = any($1::uuid[]) and o.status <> 'refused' and ($2::text is null or o.entry_id <> $2)`, [ids, except ?? null]);
+       where e.campaign_id = any($1::uuid[]) and o.status <> 'refused' and not (o.entry_id = any($2::text[]))`, [ids, except]);
     let perDay = 0, monthTotal = 0;
     for (const r of rows) {
       const bought = r.status === "live" || r.status === "paused" || r.status === "ended";
@@ -49,7 +49,7 @@ export function createMedia(deps: {
         if (r.status === "draft") { const inc = Math.max(0, Number(r.budget) - Number(r.prev_budget ?? 0)); perDay += inc / r.days; monthTotal += inc; }
         continue;
       }
-      const start = Date.parse(r.scheduled_at), end = start + r.days * DAY;
+      const start = Date.parse(r.started_at ?? r.scheduled_at), end = start + r.days * DAY;
       if ((r.status === "draft" || r.status === "live") && end > now.getTime()) perDay += Number(r.budget) / r.days;
       if (new Date(r.scheduled_at).toISOString() >= month || r.status === "live") monthTotal += Math.max(Number(r.budget), Number(r.spent));
     }
@@ -64,7 +64,8 @@ export function createMedia(deps: {
     return e !== null && root(e.campaignId) !== undefined && root(e.campaignId) === root(campaignId);
   }
 
-  async function ensureLimits(campaignId: string, o: { budget: number; days: number; currency: string }, except?: string) {
+  /** `except`: orders the checked one replaces in the count (itself; for a budget change also the order it changes). */
+  async function ensureLimits(campaignId: string, o: { budget: number; days: number; currency: string }, except: string[] = []) {
     const v = checkLimits(o, await deps.limits(campaignId), await committed(campaignId, except));
     if (!v.ok) throw new Error(`Over the ads limits: ${v.reason}. Nothing was bought or paid.`);
   }
@@ -91,7 +92,9 @@ export function createMedia(deps: {
         if (!prev || prev.status !== "live") throw new Error("A budget change changes a live order: give its entry with --order");
         if (!(await sameBrand(input.campaignId, prev.entryId))) throw new Error("A budget change changes an order of the same brand");
       }
-      await ensureLimits(input.campaignId, { budget: input.budget, days: input.days, currency });
+      // a budget change is checked as the order's new total over its days, in place of the order it changes (not on top of it)
+      const prevOrder = input.action === "budget_change" ? await order(input.orderOf!) : null;
+      await ensureLimits(input.campaignId, { budget: input.budget, days: prevOrder?.days ?? input.days, currency }, prevOrder ? [prevOrder.entryId] : []);
       // the platform and the payment method are fixed in the order now, so the person approves exactly how it will be bought
       const target = await core.channels.get(input.campaignId, "ads");
       const buyer = deps.buyers.find((b) => b.id === target?.provider);
@@ -119,7 +122,11 @@ export function createMedia(deps: {
           for (const ref of [o.boostOf, o.orderOf]) if (ref && !(await sameBrand(entry.campaignId, ref))) throw new Error(`Entry ${ref} belongs to another brand: nothing is bought`);
           const buyer = deps.buyers.find((b) => b.id === o.platform);
           if (!buyer) throw new Error(`The order's ads platform "${o.platform ?? ""}" is not configured: nothing is bought`);
-          await ensureLimits(entry.campaignId, o, entry.id);   // limits may have changed since the order was made
+          const changes = o.action === "budget_change" ? await order(o.orderOf!) : null;
+          // a budget change only for a running ad: a person may have paused it after approving the change
+          if (changes && changes.status !== "live") throw new Error(`Order ${changes.entryId} is ${changes.status}: its budget is not changed and nothing is paid`);
+          // limits may have changed since the order was made; a budget change counts in place of the order it changes
+          await ensureLimits(entry.campaignId, changes ? { ...o, days: changes.days } : o, changes ? [entry.id, changes.entryId] : [entry.id]);
           // the token is created here, handed to the platform and dropped: only its reference is stored
           const pay = async (amount: number): Promise<PaymentToken | null> => {
             if (!buyer.requiresPayment || o.prepaid || amount <= 0) return null;
@@ -143,7 +150,7 @@ export function createMedia(deps: {
             key: idempotencyKey, name: entry.title, text: entry.body, link, assetUrl: asset ? await asset.url() : null, budget: o.budget, currency: o.currency, days: o.days,
             objective: o.objective, boostOf: boosted?.externalId ?? null,
           }, await pay(o.budget));
-          await q("update media_order set status = 'live', platform = $2, external_id = $3, updated_at = now() where entry_id = $1", [entry.id, buyer.id, r.externalId]);
+          await q("update media_order set status = 'live', platform = $2, external_id = $3, started_at = coalesce(started_at, $4), updated_at = now() where entry_id = $1", [entry.id, buyer.id, r.externalId, (await deps.now()).toISOString()]);
           return { externalId: r.externalId };
         },
       };
@@ -168,7 +175,8 @@ export function createMedia(deps: {
           await deps.economics.store.upsertCost({ campaignId: o.campaignId, kind: "media", units: d.spend, unit: "money", amount: d.spend, source: buyer.id, sourceRef: `${o.externalId}:${d.day}`, entryId: o.entryId, createdBy: "media pull", at });
           await q("update cost_entry set units = $3, amount = $3 where source = $1 and source_ref = $2 and amount <> $3", [buyer.id, `${o.externalId}:${d.day}`, d.spend]);
         }
-        if (Date.parse(o.createdAt) + (o.days + 1) * DAY < now.getTime()) await q("update media_order set status = 'ended', updated_at = now() where entry_id = $1", [o.entryId]);
+        // its days run from when it went live, not from when the draft was made
+        if (Date.parse(o.startedAt ?? o.createdAt) + (o.days + 1) * DAY < now.getTime()) await q("update media_order set status = 'ended', updated_at = now() where entry_id = $1", [o.entryId]);
       }
       return { orders: live.length, points };
     },
@@ -188,7 +196,10 @@ export function createMedia(deps: {
     async pause(entryId: string) {
       const o = await order(entryId);
       if (!o || o.status !== "live" || !o.externalId) throw new Error(`Entry ${entryId} is no live ad`);
-      await deps.buyers.find((b) => b.id === o.platform)?.pause(o.externalId);
+      const buyer = deps.buyers.find((b) => b.id === o.platform);
+      // never mark an ad paused that keeps running: without its platform adapter it cannot be stopped from here
+      if (!buyer) throw new Error(`The ad runs on ${o.platform}, which is not configured here: pause it on the platform`);
+      await buyer.pause(o.externalId);
       await q("update media_order set status = 'paused', updated_at = now() where entry_id = $1", [entryId]);
     },
 

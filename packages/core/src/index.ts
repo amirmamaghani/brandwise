@@ -235,6 +235,8 @@ export function createCore(cfg: CoreConfig) {
       let status: Status = entry.status;
       if (entry.status === "changes_requested" && (contentChanged || timeChanged)) status = "pending_approval";
       else if (contentChanged && entry.tier > 1 && (entry.status === "approved" || entry.status === "scheduled")) status = "pending_approval";
+      // when money is spent is part of what a person approved: moving paid media sends it back too
+      else if (timeChanged && entry.channel === "ads" && (entry.status === "approved" || entry.status === "scheduled")) status = "pending_approval";
       await q(
         `update content_calendar set title = $2, body = $3, link = $4, channel = $5, asset_id = $6, scheduled_at = $7, status = $8,
            review_note = case when $8 = 'changes_requested' then review_note else null end,

@@ -80,7 +80,10 @@ test("the explore slot is deterministic and its share shrinks as knowledge grows
 test("an application that went clearly against a learning counts as contrary", () => {
   assert.equal(isContrary({ result: "better" }, { rate: 0.02, low: 0.015, high: 0.025, baseline: 0.04 }), true);
   assert.equal(isContrary({ result: "better" }, { rate: 0.035, low: 0.025, high: 0.045, baseline: 0.04 }), false, "inside the noise is not contrary");
-  assert.equal(isContrary({ result: "worse" }, { rate: 0.06, low: 0.05, high: 0.07, baseline: 0.04 }), true);
+  // following "to is worse" means keeping `from`: doing clearly better is consistent, doing clearly worse goes against it
+  assert.equal(isContrary({ result: "worse" }, { rate: 0.06, low: 0.05, high: 0.07, baseline: 0.04 }), false);
+  assert.equal(isContrary({ result: "worse" }, { rate: 0.02, low: 0.015, high: 0.025, baseline: 0.04 }), true);
+  assert.equal(isContrary({ result: "unsafe" }, { rate: 0.02, low: 0.015, high: 0.025, baseline: 0.04 }), false, "an unsafe finding is about complaints, not clicks");
 });
 
 test("the brief: strongest first, campaign beats brand on a lever, null results, candidates, rules, feedback and diversity", () => {

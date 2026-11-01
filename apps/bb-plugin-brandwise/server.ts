@@ -334,46 +334,70 @@ export default async function plugin(bb: BbPluginApi) {
   // E-mail: providers with credentials, events in, statistics out (core/email). The salt makes the stored recipient hashes ours alone.
   // The salt lives in Postgres with the data it protects (docs/analytics.md D6): losing bb KV must not change every recipient hash.
   // An install from before keeps its KV salt, copied over once.
+  // KV keeps a mirror, so a database that is down at start never leads to a new random salt (which would never match the stored hashes).
   const emailSalt = await (async () => {
     const kv = await bb.storage.kv.get<string>("email_salt");
-    if (core === null) return kv ?? (await (async () => { const s = randomUUID(); await bb.storage.kv.set("email_salt", s); return s; })());
-    const row = (await core.pool.query("select value from installation where key = 'email.salt'").catch(() => ({ rows: [] as { value: string }[] }))).rows[0];
-    if (row) return row.value;
-    const s = kv ?? randomUUID();
-    await core.pool.query("insert into installation (key, value) values ('email.salt', $1) on conflict (key) do nothing", [s]).catch(() => {});
-    return (await core.pool.query("select value from installation where key = 'email.salt'").catch(() => ({ rows: [{ value: s }] }))).rows[0]?.value ?? s;
+    const mirror = async (s: string) => { if (kv !== s) await bb.storage.kv.set("email_salt", s); return s; };
+    const read = async () => (await core!.pool.query("select value from installation where key = 'email.salt'")).rows[0]?.value as string | undefined;
+    if (core !== null) {
+      try {
+        const stored = await read();
+        if (stored) return mirror(stored);
+        await core.pool.query("insert into installation (key, value) values ('email.salt', $1) on conflict (key) do nothing", [kv ?? randomUUID()]);
+        return mirror((await read())!);
+      } catch (cause) {
+        bb.log.warn(`installation salt not readable from the database (${cause instanceof Error ? cause.message : String(cause)}); using the mirrored one`);
+      }
+    }
+    // no database (yet): the mirror, or a new salt that the next start with a database stores there (an install with no hashes yet)
+    return kv ?? mirror(randomUUID());
   })();
   const devClock = async () => new Date(Date.now() + (core ? await regulatorStore(core.pool).clockOffset() : 0) * 1000);
+  // Everything built on the core is built per core: a new database or storage setting makes a new core (and closes the old pool), so a
+  // service made at startup would keep the closed one. Each getter builds its service once for the current core.
+  const perCore = <T,>(make: (c: Core) => T) => {
+    const made = new WeakMap<Core, T>();
+    return (): T | null => {
+      if (core === null) return null;
+      if (!made.has(core)) made.set(core, make(core));
+      return made.get(core)!;
+    };
+  };
   // Leads and orders (phase 4): signed webhooks and CSV imports; the simulated shop turns simulated clicks into leads.
-  const conversions = core === null ? null : createConversions({ core, salt: emailSalt, secretKey: cfg.secretKey || undefined, now: devClock });
-  const email = core === null ? null : createEmail({
-    pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
-    sim: cfg.simEnabled ? { now: devClock, onSent: async (s) => { await conversions?.simShop(s); } } : undefined,
-  });
+  const conversionsOf = perCore((c) => createConversions({ core: c, salt: emailSalt, secretKey: cfg.secretKey || undefined, now: devClock }));
+  // E-mail: providers with credentials, events in, statistics out (core/email).
+  const emailOf = perCore((c) => createEmail({
+    pool: c.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
+    sim: cfg.simEnabled ? { now: devClock, onSent: async (s) => { await conversionsOf()?.simShop(s); } } : undefined,
+  }));
   // Learnings (docs/analytics.md): verdicts and patterns as structured rows, the brief agents read before writing. On the development clock.
-  const learnings = core === null ? null : createLearnings({ core, now: devClock, measure: email ? emailMeasure(email) : undefined });
-  const learningsCli = createLearningsCli({ core: need, learnings: () => learnings });
+  const learningsOf = perCore((c) => { const e = emailOf(); return createLearnings({ core: c, now: devClock, measure: e ? emailMeasure(e) : undefined }); });
+  const learningsCli = createLearningsCli({ core: need, learnings: learningsOf });
   // Costs and the brand's economics: the generation ledger, review minutes, e-mail sends, the profile a person sets.
-  const economicsService = core === null ? null : createEconomics({
-    core, now: async () => new Date(), conversions: conversions ?? undefined,
-    unitPrice: async (provider, campaignId) => { const r = await core!.settings.resolve(campaignId, `${provider}.unitPrice`).catch(() => null); return typeof r?.value === "number" ? r.value : null; },
-  });
-  const economics = () => { if (!economicsService) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return economicsService; };
-  const conv = () => { if (!conversions) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return conversions; };
+  // One clock for every report: the development clock (real time plus the offset `sim advance` sets, 0 in production).
+  const economicsOf = perCore((c) => createEconomics({
+    core: c, now: devClock, conversions: conversionsOf() ?? undefined,
+    unitPrice: async (provider, campaignId) => { const r = await c.settings.resolve(campaignId, `${provider}.unitPrice`).catch(() => null); return typeof r?.value === "number" ? r.value : null; },
+  }));
+  const economics = () => { const e = economicsOf(); if (!e) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return e; };
+  const conv = () => { const x = conversionsOf(); if (!x) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return x; };
   // Paid media (phase 5). Real platforms and ACP payments are adapters still to write; the mock pair comes with the simulated provider.
-  const num = async (campaignId: string, key: string) => { const r = await core!.settings.resolve(campaignId, key).catch(() => null); return typeof r?.value === "number" && r.value > 0 ? r.value : null; };
-  const media = core === null || economicsService === null ? null : createMedia({
-    core, economics: economicsService, conversions: conversions ?? undefined,
-    buyers: cfg.simEnabled ? [mockBuyer({ now: async () => new Date() })] : [], payments: cfg.simEnabled ? [mockPayments()] : [],
-    limits: async (campaignId) => ({ maxPerOrder: await num(campaignId, "ads.maxPerOrder"), dailyLimit: await num(campaignId, "ads.dailyLimit"), monthlyLimit: await num(campaignId, "ads.monthlyLimit"), currency: (await economicsService.profile.get(campaignId))?.profile.currency ?? null }),
-    now: async () => new Date(),
+  const mediaOf = perCore((c) => {
+    const num = async (campaignId: string, key: string) => { const r = await c.settings.resolve(campaignId, key).catch(() => null); return typeof r?.value === "number" && r.value > 0 ? r.value : null; };
+    const econ = economicsOf()!;
+    return createMedia({
+      core: c, economics: econ, conversions: conversionsOf() ?? undefined,
+      buyers: cfg.simEnabled ? [mockBuyer({ now: devClock })] : [], payments: cfg.simEnabled ? [mockPayments()] : [],
+      limits: async (campaignId) => ({ maxPerOrder: await num(campaignId, "ads.maxPerOrder"), dailyLimit: await num(campaignId, "ads.dailyLimit"), monthlyLimit: await num(campaignId, "ads.monthlyLimit"), currency: (await econ.profile.get(campaignId))?.profile.currency ?? null }),
+      now: devClock,
+    });
   });
-  const ads = () => { if (!media) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return media; };
-  const resultsCli = createResultsCli({ core: need, economics, conversions: () => conversions });
+  const ads = () => { const m = mediaOf(); if (!m) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return m; };
+  const resultsCli = createResultsCli({ core: need, economics, conversions: conversionsOf });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined, conversions: conversions ?? undefined }) : null;
+  const regulatorOf = perCore((c) => { const e = emailOf(); return e ? createRegulator({ core: c, email: e, library: () => emailTemplates.library(), learnings: learningsOf() ?? undefined, conversions: conversionsOf() ?? undefined }) : null; });
   const editorCli = createEditorCli({
-    core: need, regulator: () => regulator,
+    core: need, regulator: regulatorOf,
     autorun: {
       enabled: async (campaignId) => (await need().settings.resolve(campaignId, "editor.autoRun"))?.value === true,
       spawn: async (prompt, campaignId) => { const id = await spawnAgentThread(bb, prompt); await assignThread(id, campaignId); return id; },
@@ -382,15 +406,16 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
-  const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : []), ...(media ? [media.connector()] : [])];
-  for (const p of email?.providers ?? []) {
+  const allConnectors = () => { const email = emailOf(), media = mediaOf(); return [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : []), ...(media ? [media.connector()] : [])]; };
+  // routes for the providers configured at start (credentials are plugin settings); each call goes to the current e-mail service
+  for (const p of emailOf()?.providers ?? []) {
     if (!p.events) continue;
     // the provider signs each call, so the route needs no bb login (a signature failure stores nothing)
     bb.http.route("POST", `/webhooks/email/${p.id}`, async (ctx) => {
       const headers: Record<string, string> = {};
       ctx.req.raw.headers.forEach((value, key) => { headers[key] = value; });
       try {
-        const r = await email!.webhook(p.id, { headers, body: await ctx.req.text() });
+        const r = await emailOf()!.webhook(p.id, { headers, body: await ctx.req.text() });
         return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
       } catch (cause) {
         return new Response(JSON.stringify({ error: cause instanceof Error ? cause.message : String(cause) }), { status: 400, headers: { "content-type": "application/json" } });
@@ -401,6 +426,7 @@ export default async function plugin(bb: BbPluginApi) {
   // Conversion sources sign their calls (generic format, docs/analytics.md phase 4), so the route needs no bb login; ?source=<id>.
   bb.http.route("POST", "/webhooks/conversions", async (ctx) => {
     const json = (status: number, v: unknown) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    const conversions = conversionsOf();
     if (!conversions) return json(503, { error: "not configured" });
     const source = new URL(ctx.req.raw.url).searchParams.get("source") ?? "";
     const headers: Record<string, string> = {};
@@ -539,7 +565,7 @@ export default async function plugin(bb: BbPluginApi) {
     bb, need, enginePath: () => cfg.videoEnginePath, assetsChanged: () => bb.realtime.publish(ASSETS_CHANGED, {}),
   });
 
-  const emailTemplates = createEmailTemplates({ need, email: () => email, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath, publicAssets: () => (cfg.publicAssetBucket && cfg.publicAssetBaseUrl ? { bucket: cfg.publicAssetBucket, baseUrl: cfg.publicAssetBaseUrl } : null) });
+  const emailTemplates = createEmailTemplates({ need, email: emailOf, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath, publicAssets: () => (cfg.publicAssetBucket && cfg.publicAssetBaseUrl ? { bucket: cfg.publicAssetBucket, baseUrl: cfg.publicAssetBaseUrl } : null) });
   const agents = createAgents({ bb, need, video: video.agentContext, email: emailTemplates.agentContext, assignThread });
 
   // Display mode: applied once per change of the setting, on `mode set` / the Settings switch, and on `mode apply`.
@@ -664,10 +690,13 @@ export default async function plugin(bb: BbPluginApi) {
       return entry;
     },
     entry_learnings: async ({ id }) => {
+      const learnings = learningsOf();
       if (!learnings) throw new Error("Not configured");
       const info = await learnings.forEntry(id);
       const entry = await need().calendar.get(id);
+      const regulator = regulatorOf();
       const e = entry?.experimentId && regulator ? await regulator.store.experiment(entry.experimentId) : null;
+      const media = mediaOf();
       const mo = entry?.channel === "ads" && media ? await media.order(id) : null;
       return {
         ...info,
@@ -676,6 +705,7 @@ export default async function plugin(bb: BbPluginApi) {
       };
     },
     learnings_list: async ({ campaignId }) => {
+      const learnings = learningsOf();
       if (!learnings) throw new Error("Not configured");
       return { learnings: (await learnings.list(campaignId)).map((l) => ({ id: l.id, scope: l.scope, kind: l.kind, evidence: l.evidence, result: l.result, statement: l.statement, channel: l.channel, status: l.status, effectiveStatus: l.effectiveStatus, contrary: l.contrary, createdBy: l.createdBy, confirmedBy: l.confirmedBy, decidedAt: l.decidedAt, sourceIds: l.sourceIds })) };
     },
@@ -698,6 +728,7 @@ export default async function plugin(bb: BbPluginApi) {
     economics_set: async ({ campaignId, profile }) => { await economics().profile.set(campaignId, profile, "ui"); return { ok: true }; },
     cost_add: async ({ campaignId, kind, amount, ref, note, entryId }) => { await economics().addCost({ campaignId, kind, amount, ref, note, entryId: entryId ?? null, createdBy: "ui" }); return { ok: true }; },
     learning_set_status: async ({ id, action }) => {
+      const learnings = learningsOf();
       if (!learnings) throw new Error("Not configured");
       if (action === "confirm") await learnings.confirm(id, "ui"); else await learnings.retire(id, "ui");
       return { ok: true };
@@ -881,6 +912,7 @@ export default async function plugin(bb: BbPluginApi) {
   async function attachFromArgs(entryId: string, args: string[]) {
     const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
     const input = { briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") };
+    const learnings = learningsOf();
     if (!learnings || Object.values(input).every((v) => v === undefined)) return null;
     return learnings.attach(entryId, { ...input, tagSource: "agent" });
   }
@@ -1212,6 +1244,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "email" && (action === "template" || action === "brand" || action === "component" || action === "entry")) return emailTemplates.cli(args, { val, positional, reply, usage });
         if (area === "email" && action === "stats") {
+          const email = emailOf();
           if (email === null) return { exitCode: 1, stderr: "Not configured: run infra/bb-instance/provision.sh apply" };
           const entryId = positional(args.slice(2))[0];
           const stats = await email.stats(entryId ? { entryId } : { campaignId: (await c.campaigns.resolve(val(args, "--campaign"))).id });
@@ -1221,6 +1254,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "email" && action === "ingest") { // replay a saved webhook payload (trusted file, no signature check)
           const provider = val(args, "--provider"), file = val(args, "--file");
+          const email = emailOf();
           if (!email || !provider || !file) return { exitCode: 1, stderr: usage };
           const r = await email.replay(provider, fsx.readFileSync(file, "utf8"), `replay-${px.basename(file)}`);
           if (r.stored > 0) await changed();

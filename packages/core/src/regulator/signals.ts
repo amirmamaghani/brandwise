@@ -73,8 +73,10 @@ export function buildSignals(input: {
       const n = window.length ? Math.round(pooled.delivered / window.length) : 0;
       const rate = pooled.delivered > 0 ? pooled.clicks / pooled.delivered : 0;
       const mde = minDetectableLift(rate, n);
-      const leadsKnown = window.length > 0 && window.every((w) => w.leads !== undefined);
-      const leadRate = leadsKnown && pooled.delivered > 0 ? window.reduce((t, w) => t + (w.leads ?? 0), 0) / pooled.delivered : null;
+      // leads keep coming for days: only sends whose leads have matured count, or the rate reads low
+      const leadDone = window.filter((w) => w.leads !== undefined && w.sentAt !== null && Date.parse(w.sentAt) + rails.leadMatureAfterHours * 3_600_000 <= asOf.getTime());
+      const leadDelivered = leadDone.reduce((t, w) => t + w.counts.delivered, 0);
+      const leadRate = leadDone.length > 0 && leadDelivered > 0 ? leadDone.reduce((t, w) => t + (w.leads ?? 0), 0) / leadDelivered : null;
       return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde, roundsFor: [0.2, 0.3, 0.5].map((lift) => ({ lift, rounds: roundsNeeded(rate, n, lift) })), leadRate, leadMinDetectableLift: leadRate ? minDetectableLift(leadRate, n) : null };
     })(),
     allowed: { proposeExperiment: canPropose({ ...input.state, running: running.length }, asOf, rails) },
