@@ -91,8 +91,8 @@
   /* the calendar demo */
   var demo = $("#demo");
   if (!demo) return;
-  var approveBox = $("#approve", demo), faces = $$(".face", demo), rail = $$("#rail li");
-  var statusEl = $("#demo-status"), pauseBtn = $("#demo-pause"), replayBtn = $("#demo-replay");
+  var approveBox = $("#approve", demo), faces = $$(".face", demo);
+  var statusEl = $("#demo-status");
 
   function set(k, v) { demo.setAttribute("data-" + k, v); }
   function get(k) { return demo.getAttribute("data-" + k); }
@@ -104,19 +104,21 @@
     });
     approveBox.classList.toggle("attn", name === "news");
   }
-  function step(n) {
-    set("step", n);
-    rail.forEach(function (li, i) {
-      li.classList.toggle("done", i < n - 1 || (n === 5 && i === 4));
-      li.classList.toggle("cur", i === n - 1);
-    });
-  }
+  function step(n) { set("step", n); }
   function say(text) { statusEl.textContent = text; }
+  /* on narrow screens the week scrolls sideways: bring the day the story is about into view */
+  var week = $(".week", demo);
+  function showDay(cls) {
+    if (week.scrollWidth <= week.clientWidth + 1) return;
+    var day = $(".day." + cls, demo);
+    var left = day.getBoundingClientRect().left - week.getBoundingClientRect().left + week.scrollLeft - 14;
+    week.scrollTo({ left: left, behavior: reduce ? "auto" : "smooth" });
+  }
   function currentFace() { var f = $(".face.on", demo); return f ? f.getAttribute("data-f") : ""; }
 
   /* a tiny clock that only advances while the demo is playing and on screen */
   var queue = [], clock = 0, last = 0, raf = 0, running = false;
-  var paused = false, inView = false, started = false, manual = false;
+  var inView = false, started = false, manual = false;
   function after(ms, fn) { queue.push({ t: clock + ms, fn: fn }); queue.sort(function (a, b) { return a.t - b.t; }); }
   function tick(now) {
     if (!running) return;
@@ -125,7 +127,7 @@
     raf = requestAnimationFrame(tick);
   }
   function sync() {
-    var go = started && !paused && inView && !d.hidden;
+    var go = started && inView && !d.hidden;
     demo.classList.toggle("halt", started && !go);
     if (go && !running) { running = true; last = performance.now(); raf = requestAnimationFrame(tick); }
     if (!go && running) { running = false; cancelAnimationFrame(raf); }
@@ -136,8 +138,9 @@
   function story() {
     queue = []; manual = false; hint(false);
     demo.classList.remove("leaving");
-    set("news", "none"); set("teaser", "pend"); set("stats", "off"); face("teaser"); step(1);
-    after(600, function () { set("news", "draft"); });
+    set("news", "none"); set("teaser", "pend"); face("teaser"); step(1);
+    showDay("d2");
+    after(600, function () { set("news", "draft"); showDay("d4"); });
     after(2400, function () { set("news", "pend"); step(2); });
     after(3300, function () { face("news"); waitForPerson(); });
   }
@@ -153,10 +156,9 @@
     set("news", "ok"); face("ok"); step(3);
     after(1800, function () { face("run"); step(4); });
     after(3300, function () { set("news", "pub"); });
-    after(4100, function () { set("stats", "on"); step(5); });
-    after(5600, function () { face(get("teaser") === "pend" ? "teaser" : get("teaser") === "ok" ? "t-ok" : "t-back"); });
-    after(13600, function () { demo.classList.add("leaving"); });
-    after(14200, story);
+    after(4800, function () { showDay("d2"); face(get("teaser") === "pend" ? "teaser" : get("teaser") === "ok" ? "t-ok" : "t-back"); });
+    after(11600, function () { demo.classList.add("leaving"); });
+    after(12200, story);
   }
   function sendBackNews() {
     hint(false);
@@ -178,18 +180,10 @@
     var f = b.closest(".face").getAttribute("data-f"), act = b.getAttribute("data-act");
     if (f === "teaser") { teaser(act); return; }
     manual = true; queue = []; press(b);
-    if (paused) { paused = false; updatePause(); }
     if (act === "approve") { say("November newsletter approved. The scheduler publishes it when it is due."); approveNews(); }
     else { say("November newsletter sent back with a change request."); sendBackNews(); }
     sync();
   });
-
-  function updatePause() {
-    pauseBtn.setAttribute("aria-label", paused ? "Play the preview" : "Pause the preview");
-    $("use", pauseBtn).setAttribute("href", paused ? "#i-play" : "#i-pause");
-  }
-  pauseBtn.addEventListener("click", function () { paused = !paused; updatePause(); sync(); });
-  replayBtn.addEventListener("click", function () { paused = false; updatePause(); story(); sync(); });
 
   if (reduce || !hasIO) { demo.classList.add("built"); return; }
 
