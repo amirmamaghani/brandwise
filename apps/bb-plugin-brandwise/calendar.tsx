@@ -426,7 +426,7 @@ const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "
 /** What the entry was written from: its brief (explore or exploit slot), the learnings it applies or tests, and its tags. */
 function EntryLearnings({ entry }: { entry: CalendarEntry }) {
   const rpc = useRpc<typeof rpcContract>();
-  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }> } | null>(null);
+  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }>; experiment: { id: string; hypothesis: string; lever: string | null; variant: string | null; round: number; plannedRounds: number; expectedLift: number | null; mde: number | null; status: string; verdict: string | null } | null } | null>(null);
   useEffect(() => {
     let live = true;
     rpc.call("entry_learnings", { id: entry.id }).then((r) => live && setInfo(r), () => live && setInfo(null));
@@ -435,11 +435,21 @@ function EntryLearnings({ entry }: { entry: CalendarEntry }) {
   if (info === null) return null;
   const tags = Object.entries(info.attributes).filter(([, a]) => a.source !== "derived");
   const byAgent = entry.createdBy !== "ui";
+  const exp = info.experiment;
+  const experimentBlock = exp ? (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border p-2 text-xs">
+      <p><span className="font-medium">Experiment {exp.id}</span>, variant {exp.variant === "A" ? "A (control)" : "B (challenger)"}, round {exp.round} of {exp.plannedRounds}{exp.verdict ? ` · verdict ${exp.verdict}` : ""}</p>
+      <p>{exp.hypothesis}{exp.lever ? ` (${exp.lever})` : ""}</p>
+      <p className="text-muted-foreground">Registered before the first send: expected {exp.expectedLift === null ? "n/a" : `+${Math.round(100 * exp.expectedLift)} %`}{exp.mde === null ? "" : `, the planned sample can show +${Math.round(100 * exp.mde)} % or more`}. Approve both variants as they are: the test compares them.</p>
+    </div>
+  ) : null;
   if (info.briefId === null && info.applied.length === 0 && tags.length === 0) {
+    if (experimentBlock) return experimentBlock;
     return byAgent ? <p className="text-xs text-muted-foreground">No learnings declared: the author did not say which brief it wrote from.</p> : null;
   }
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border p-2 text-sm">
+      {experimentBlock}
       <p className="text-xs text-muted-foreground">
         Written from brief {info.briefId ?? "none"}{info.slot ? ` · ${info.slot} slot` : ""}
       </p>

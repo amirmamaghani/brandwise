@@ -39,7 +39,7 @@ export function fmtSignals(s: Signals): string {
   for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
   for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
   if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
-  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, an experiment can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive.`);
+  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, one send can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive. A series of rounds shows less: ${s.power.roundsFor.map((r) => `+${Math.round(100 * r.lift)} % needs ${r.rounds ?? "more than 20"} round(s)`).join(", ")}.`);
   const p = s.allowed.proposeExperiment;
   lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
   for (const n of s.notes) lines.push(`Note: ${n}`);
@@ -82,20 +82,30 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     if (action === "experiments") {
       const sub = rest[0];
       if (sub === "propose") {
-        const [armA, armB, hypothesis, lever] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis"), val(args, "--lever")];
+        const [armA, armB, hypothesis, lever, expected] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis"), val(args, "--lever"), val(args, "--expected-lift")];
         if (!armA || !armB || !hypothesis) return bad;
         if (!lever) return { exitCode: 1, stderr: 'Name the one thing the experiment changes: --lever "attribute: from -> to", e.g. --lever "subject_style: plain -> number"' };
-        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who });
-        return reply(e, `Experiment ${e.id} started: A ${e.armA} (control) against B ${e.armB} (challenger), lever ${e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "?"}. The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}`);
+        if (!expected || !Number.isFinite(Number(expected))) return { exitCode: 1, stderr: "Register what you expect before the first send: --expected-lift 0.3 (+30 %). Code checks it against what the audience can show and says how many --rounds it needs." };
+        const rounds = Number(val(args, "--rounds") ?? 1);
+        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who, expectedLift: Number(expected), rounds });
+        return reply(e, `Experiment ${e.id} registered and started: A ${e.armA} (control) against B ${e.armB} (challenger), lever ${e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "?"}, expected ${pct(e.expectedLift, 0)}, ${e.plannedRounds} round(s)${e.mde !== null ? `, can show ${pct(e.mde, 0)} or more` : ""}. The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}${e.plannedRounds > 1 ? `; after each mature round write the next pair and add it with: editor experiments add-round ${e.id} --a <control entry> --b <challenger entry>` : ""}`);
+      }
+      if (sub === "add-round") {
+        const [a, bb] = [val(args, "--a"), val(args, "--b")];
+        if (!rest[1] || !a || !bb) return bad;
+        const e = await reg.experiments.addRound({ experimentId: rest[1], armA: a, armB: bb });
+        return reply(e, `Round ${e.rounds.length} of ${e.plannedRounds} added to experiment ${e.id}: A ${a}, B ${bb}.`);
       }
       if (sub === "backfill") { const n = await reg.experiments.backfill(b.id); return reply({ created: n }, `${n} structured learning(s) made from earlier verdicts.`); }
       if (sub === "evaluate") {
         if (!rest[1]) return bad;
         const r = await reg.experiments.evaluate(rest[1], asOf);
-        return reply(r, r.verdict === "wait" ? `Not ready: ${r.reasons.join("; ")}${r.readyAt ? ` (look again after ${r.readyAt.slice(0, 16)})` : ""}` : `Verdict ${r.verdict}${r.final ? " (final)" : ""}: ${r.reasons.join(" ") || "recorded earlier"}`);
+        return reply(r, r.verdict === "wait" ? `Not ready: ${r.reasons.join("; ")}${r.readyAt ? ` (look again after ${r.readyAt.slice(0, 16)})` : ""}`
+          : r.verdict === "next_round" ? `Next round: ${r.reasons.join(" ")} Create the two write_variant tasks for it, then: editor experiments add-round ${rest[1]} --a <control entry> --b <challenger entry>`
+          : `Verdict ${r.verdict}${r.final ? " (final)" : ""}: ${r.reasons.join(" ") || "recorded earlier"}`);
       }
       const list = await reg.experiments.list(b.id, val(args, "--status"));
-      return reply(list, list.map((e) => `${e.id}  ${e.status}${e.verdict ? " -> " + e.verdict : ""}  A ${e.armA}  B ${e.armB}  "${e.hypothesis}"`).join("\n") || "No experiments.");
+      return reply(list, list.map((e) => `${e.id}  ${e.status}${e.verdict ? " -> " + e.verdict : ""}  round ${e.rounds.length}/${e.plannedRounds}  expected ${pct(e.expectedLift, 0)}  A ${e.rounds.map((r) => r.armA).join(",")}  B ${e.rounds.map((r) => r.armB).join(",")}  "${e.hypothesis}"`).join("\n") || "No experiments.");
     }
     if (action === "journal") {
       if (rest[0] === "write") {

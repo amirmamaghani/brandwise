@@ -5,12 +5,17 @@ import type { createEmail } from "../email/index.ts";
 import type { Library } from "../email/templates/library.ts";
 import { createLearnings, emailMeasure, type Learnings } from "../learnings/index.ts";
 import { parseLever, type Lever } from "../learnings/domain.ts";
-import { DEFAULT_RAILS, canPropose, judge, type ArmData, type Rails } from "./rails.ts";
-import { minDetectableLift } from "./stats.ts";
+import { DEFAULT_RAILS, canPropose, judgeSeries, type ArmData, type Rails, type Round } from "./rails.ts";
+import { minDetectableLift, roundsNeeded } from "./stats.ts";
 import { GOAL_METRICS, armOf, buildSignals, type Goal, type GoalMetric, type SendView } from "./signals.ts";
 import { regulatorStore, type ExperimentRow } from "./store.ts";
 
 type Email = ReturnType<typeof createEmail>;
+/** What the provider of a send reports: a guard on what it does not report is unavailable, not 0 %. */
+const measuredOf = (metrics: { id: string; available: boolean }[]) => ({
+  complaints: metrics.find((m) => m.id === "complaint_rate")?.available !== false,
+  unsubscribes: metrics.find((m) => m.id === "unsubscribe_rate")?.available !== false,
+});
 
 export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null; /** Where verdicts become learnings; one is made on the development clock when not given. */ learnings?: Learnings }) {
   const { core, email } = deps;
@@ -32,7 +37,7 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     return learnings.fromExperiment({
       id: e.id, campaignId: e.campaignId, hypothesis: e.hypothesis, lever: e.lever, metric: e.metric, verdict, reasons, stats,
       arms: [{ delivered: a.delivered, clicks: a.clicks }, { delivered: b.delivered, clicks: b.clicks }],
-      mde: a.delivered > 0 ? minDetectableLift(a.clicks / a.delivered, n) : null, decidedAt: at,
+      mde: a.delivered > 0 ? minDetectableLift(a.clicks / a.delivered, n) : null, decidedAt: at, rounds: e.rounds.length,
     });
   }
 
@@ -43,13 +48,13 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     for (const c of campaigns) {
       for (const send of await email.store.sends({ campaignId: c.id })) {
         const s = await email.stats({ entryId: send.entryId, asOf: asOf.toISOString() });
-        views.push({ entryId: send.entryId, title: (await core.calendar.get(send.entryId))?.title ?? send.entryId, campaignId: c.id, sentAt: send.sentAt && Date.parse(send.sentAt) <= asOf.getTime() ? send.sentAt : null, counts: s.counts });
+        views.push({ entryId: send.entryId, title: (await core.calendar.get(send.entryId))?.title ?? send.entryId, campaignId: c.id, sentAt: send.sentAt && Date.parse(send.sentAt) <= asOf.getTime() ? send.sentAt : null, counts: s.counts, measured: measuredOf(s.metrics) });
       }
     }
     return views;
   }
 
-  const view = (e: ExperimentRow) => ({ id: e.id, hypothesis: e.hypothesis, armA: e.armA, armB: e.armB, status: e.status, verdict: e.verdict, createdAt: e.createdAt, concludedAt: e.concludedAt });
+  const view = (e: ExperimentRow) => ({ id: e.id, hypothesis: e.hypothesis, armA: e.armA, armB: e.armB, status: e.status, verdict: e.verdict, createdAt: e.createdAt, concludedAt: e.concludedAt, rounds: e.rounds, plannedRounds: e.plannedRounds });
 
   async function signals(campaignId: string, asOf?: string) {
     const at = await asOfDate(asOf);
@@ -60,7 +65,21 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
   async function armData(entryId: string, at: Date) {
     const s = await email.stats({ entryId, asOf: at.toISOString() });
     const sentAt = s.sends[0]?.sentAt ?? null;
-    return armOf({ entryId, title: "", campaignId: "", sentAt: sentAt && Date.parse(sentAt) <= at.getTime() ? sentAt : null, counts: s.counts });
+    return armOf({ entryId, title: "", campaignId: "", sentAt: sentAt && Date.parse(sentAt) <= at.getTime() ? sentAt : null, counts: s.counts, measured: s.sends.length ? measuredOf(s.metrics) : undefined });
+  }
+  const roundData = async (e: ExperimentRow, at: Date): Promise<Round[]> => Promise.all(e.rounds.map(async (r) => ({ a: await armData(r.armA, at), b: await armData(r.armB, at) })));
+  const pooled = (arms: ArmData[]): ArmData => ({ ...arms[0], delivered: arms.reduce((t, a) => t + a.delivered, 0), clicks: arms.reduce((t, a) => t + a.clicks, 0), complaints: arms.reduce((t, a) => t + a.complaints, 0), unsubscribes: arms.reduce((t, a) => t + a.unsubscribes, 0) });
+
+  /** Which e-mail entry may be an arm: e-mail, under the campaign, in no experiment yet. */
+  async function armEntry(campaignId: string, id: string, used: Set<string>) {
+    const e = await core.calendar.get(id);
+    if (!e) throw new Error(`Entry ${id} does not exist`);
+    if (e.channel !== "email") throw new Error("Experiments run on e-mail entries only (channel email)");
+    const campaigns = await core.campaigns.list();
+    const c = campaigns.find((x) => x.id === e.campaignId);
+    if (!c || (c.id !== campaignId && c.rootId !== campaignId)) throw new Error("Both arms must belong to the campaign (or its child campaigns)");
+    if (used.has(e.id)) throw new Error("An entry can be in one experiment only");
+    return e;
   }
 
   return {
@@ -85,7 +104,7 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
        * Start an A/B experiment between two calendar entries. It names its lever, the one variable it changes ("subject_style: plain ->
        * number"). The rails decide whether it may start, and a lever that already showed no difference at this size is refused.
        */
-      async propose(input: { campaignId: string; hypothesis: string; lever: string | Lever; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
+      async propose(input: { campaignId: string; hypothesis: string; lever: string | Lever; armA: string; armB: string; createdBy: string; /** The lift the editor expects (0.3 = +30 %); checked against what the planned sample can show. */ expectedLift?: number; /** Rounds of the series (1 = a single A/B). */ rounds?: number }): Promise<ExperimentRow> {
         const at = await clock.now();
         if (input.hypothesis.trim().length < 10) throw new Error("Write the hypothesis: what you change and what you expect (at least a sentence)");
         const lever = typeof input.lever === "string" ? parseLever(input.lever) : input.lever;
@@ -102,9 +121,45 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!under(a.campaignId) || !under(b.campaignId)) throw new Error("Both arms must belong to the campaign (or its child campaigns)");
         if (a.campaignId === b.campaignId) throw new Error("The arms must be in different child campaigns: each arm needs its own audience, or the same people would get both variants and the result would be contaminated");
         if (used.has(a.id) || used.has(b.id)) throw new Error("An entry can be in one experiment only");
-        const gate = await learnings.retestGate(input.campaignId, lever, (await signals(input.campaignId)).power?.deliveredPerArm ?? null);
+        const rounds = input.rounds ?? 1;
+        if (!Number.isInteger(rounds) || rounds < 1 || rounds > 20) throw new Error("Rounds are 1 to 20");
+        const expected = input.expectedLift ?? null;
+        if (expected !== null && !(expected >= rails.minRelativeLift)) throw new Error(`Cannot start an experiment: an expected lift of ${Math.round(100 * expected)} % is below the ${Math.round(100 * rails.minRelativeLift)} % a win needs to be adopted; test a bigger change`);
+        const power = (await signals(input.campaignId)).power;
+        const perArm = power?.deliveredPerArm ?? null, rate = power?.clickRate ?? null;
+        const mde = perArm && rate ? minDetectableLift(rate, perArm * rounds) : null;
+        if (expected !== null && perArm && rate) {
+          if (mde === null || mde > expected) {
+            const need = roundsNeeded(rate, perArm, expected);
+            throw new Error(`Cannot start an experiment: with about ${perArm} delivered per arm and round at a ${(100 * rate).toFixed(1)} % click rate, ${rounds} round(s) can only show a lift of ${mde === null ? "more than double" : `${Math.round(100 * mde)} %`}; your expected ${Math.round(100 * expected)} % ${need === null ? "is not testable within 20 rounds: change something bigger" : `needs ${need} rounds (--rounds ${need})`}`);
+          }
+        }
+        const gate = await learnings.retestGate(input.campaignId, lever, perArm ? perArm * rounds : null);
         if (!gate.ok) throw new Error(`Cannot start an experiment: ${gate.reason}`);
-        return store.insertExperiment({ campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), lever, metric: "click_rate", armA: a.id, armB: b.id, createdBy: input.createdBy });
+        return store.insertExperiment({
+          campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), lever, metric: "click_rate", armA: a.id, armB: b.id, createdBy: input.createdBy,
+          expectedLift: expected, plannedRounds: rounds, plannedPerArm: perArm, mde, guardrails: rails.guards,
+          decisionRule: { method: "frequentist", alpha: rails.significance, minRelativeLift: rails.minRelativeLift, test: rounds > 1 ? "cochran-mantel-haenszel" : "two-proportion z" },
+        });
+      },
+      /**
+       * Add the next pair of a series: the same change, A to the control's audience and B to the challenger's, after the previous
+       * round was sent. No verdict comes before the planned rounds are mature.
+       */
+      async addRound(input: { experimentId: string; armA: string; armB: string }): Promise<ExperimentRow> {
+        const e = await store.experiment(input.experimentId);
+        if (!e) throw new Error(`No experiment ${input.experimentId}`);
+        if (e.status !== "running") throw new Error(`Experiment ${e.id} is ${e.status}`);
+        if (e.rounds.length >= e.plannedRounds) throw new Error(`Experiment ${e.id} has all its ${e.plannedRounds} round(s)`);
+        const at = await clock.now();
+        const last = e.rounds[e.rounds.length - 1];
+        if ((await armData(last.armA, at)).sentAt === null || (await armData(last.armB, at)).sentAt === null) throw new Error(`Round ${last.round} has not been sent yet: wait for it before adding the next one`);
+        const used = await store.usedArms();
+        const [a, b] = [await armEntry(e.campaignId, input.armA, used), await armEntry(e.campaignId, input.armB, used)];
+        const [firstA, firstB] = [await core.calendar.get(e.rounds[0].armA), await core.calendar.get(e.rounds[0].armB)];
+        if (a.campaignId !== firstA?.campaignId || b.campaignId !== firstB?.campaignId) throw new Error("Each round goes to the same audiences: A to the control's arm campaign, B to the challenger's");
+        await store.addRound(e.id, last.round + 1, a.id, b.id);
+        return (await store.experiment(e.id))!;
       },
       /**
        * Judge a running experiment with the rails. While data is still arriving it only reports what to wait for; once it can
@@ -115,9 +170,10 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!e) throw new Error(`No experiment ${id}`);
         if (e.status === "concluded") return { experiment: e, verdict: e.verdict!, reasons: [] as string[], readyAt: null, final: true };
         const at = await asOfDate(asOf);
-        const [armA, armB] = [await armData(e.armA, at), await armData(e.armB, at)];
-        const j = judge(armA, armB, at, rails);
-        if (j.verdict === "wait") return { experiment: e, verdict: "wait" as const, reasons: j.reasons, readyAt: j.readyAt, final: false };
+        const rounds = await roundData(e, at);
+        const [armA, armB] = [pooled(rounds.map((r) => r.a)), pooled(rounds.map((r) => r.b))];
+        const j = judgeSeries(rounds, e.plannedRounds, at, rails);
+        if (j.verdict === "wait" || j.verdict === "next_round") return { experiment: e, verdict: j.verdict, reasons: j.reasons, readyAt: j.readyAt, final: false };
         await store.conclude(id, j.verdict, { reasons: j.reasons, stats: j.stats, asOf: at.toISOString() }, at.toISOString());
         const st = await store.state(e.campaignId);
         if (j.verdict === "B") await store.patchState(e.campaignId, { incumbentEntryId: e.armB, lastAdoptedAt: at.toISOString() });
@@ -134,7 +190,8 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
           if (await learnings.store.byExperiment(e.id)) continue;
           const r = (e.result ?? {}) as { reasons?: string[]; stats?: { rateA: number; rateB: number; lift: number | null; p: number } | null; asOf?: string };
           const at = new Date(r.asOf ?? e.concludedAt ?? e.createdAt);
-          await learn(e, e.verdict ?? "inconclusive", r.reasons ?? [], r.stats ?? null, await armData(e.armA, at), await armData(e.armB, at), e.concludedAt ?? at.toISOString());
+          const rounds = await roundData(e, at);
+          await learn(e, e.verdict ?? "inconclusive", r.reasons ?? [], r.stats ?? null, pooled(rounds.map((x) => x.a)), pooled(rounds.map((x) => x.b)), e.concludedAt ?? at.toISOString());
           n++;
         }
         return n;

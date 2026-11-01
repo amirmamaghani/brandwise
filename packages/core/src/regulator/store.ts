@@ -4,12 +4,25 @@ import type { Lever } from "../learnings/domain.ts";
 import type { Goal, GoalMetric } from "./signals.ts";
 
 export type State = { frozen: boolean; frozenReason: string | null; incumbentEntryId: string | null; lastAdoptedAt: string | null };
-export type ExperimentRow = { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; armA: string; armB: string; status: "running" | "concluded"; verdict: "A" | "B" | "inconclusive" | "freeze" | null; result: unknown; createdBy: string; createdAt: string; concludedAt: string | null };
+export type ExperimentRow = {
+  id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; armA: string; armB: string; status: "running" | "concluded";
+  verdict: "A" | "B" | "inconclusive" | "freeze" | null; result: unknown; createdBy: string; createdAt: string; concludedAt: string | null;
+  /** Registration: what the editor expects and what the planned sample can show, fixed before the first send. */
+  expectedLift: number | null; plannedRounds: number; plannedPerArm: number | null; mde: number | null;
+  /** Round 1 is armA/armB; a series adds rounds with the same change. */
+  rounds: { round: number; armA: string; armB: string }[];
+};
 export type JournalRow = { id: number; campaignId: string; kind: "run" | "learning" | "note"; author: string; body: string; data: unknown; at: string };
 export type TaskRow = { id: string; campaignId: string; kind: string; brief: string; params: Record<string, unknown>; status: "open" | "claimed" | "done" | "cancelled"; claimedBy: string | null; result: unknown; createdBy: string; createdAt: string };
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
-const experimentFrom = (r: any): ExperimentRow => ({ id: r.id, campaignId: r.campaign_id, hypothesis: r.hypothesis, lever: r.lever ?? null, metric: r.metric, armA: r.arm_a_entry, armB: r.arm_b_entry, status: r.status, verdict: r.verdict, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)!, concludedAt: iso(r.concluded_at) });
+const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+const experimentFrom = (r: any, rounds: ExperimentRow["rounds"] = []): ExperimentRow => ({
+  id: r.id, campaignId: r.campaign_id, hypothesis: r.hypothesis, lever: r.lever ?? null, metric: r.metric, armA: r.arm_a_entry, armB: r.arm_b_entry,
+  status: r.status, verdict: r.verdict, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)!, concludedAt: iso(r.concluded_at),
+  expectedLift: num(r.expected_lift), plannedRounds: Number(r.planned_rounds ?? 1), plannedPerArm: num(r.planned_per_arm), mde: num(r.mde),
+  rounds: rounds.length ? rounds : [{ round: 1, armA: r.arm_a_entry, armB: r.arm_b_entry }],
+});
 const taskFrom = (r: any): TaskRow => ({ id: r.id, campaignId: r.campaign_id, kind: r.kind, brief: r.brief, params: r.params, status: r.status, claimedBy: r.claimed_by, result: r.result, createdBy: r.created_by, createdAt: iso(r.created_at)! });
 
 export function regulatorStore(pool: pg.Pool) {
@@ -31,18 +44,34 @@ export function regulatorStore(pool: pg.Pool) {
                on conflict (campaign_id) do update set frozen = $2, frozen_reason = $3, incumbent_entry_id = $4, last_adopted_at = $5`,
         [campaignId, n.frozen, n.frozenReason, n.incumbentEntryId, n.lastAdoptedAt]);
     },
-    async insertExperiment(e: { campaignId: string; hypothesis: string; lever: Lever; metric: string; armA: string; armB: string; createdBy: string }): Promise<ExperimentRow> {
-      return experimentFrom((await q("insert into experiment (campaign_id, hypothesis, lever, metric, arm_a_entry, arm_b_entry, status, created_by) values ($1,$2,$3,$4,$5,$6,'running',$7) returning *", [e.campaignId, e.hypothesis, e.lever, e.metric, e.armA, e.armB, e.createdBy]))[0]);
+    async insertExperiment(e: { campaignId: string; hypothesis: string; lever: Lever; metric: string; armA: string; armB: string; createdBy: string; expectedLift?: number | null; plannedRounds?: number; plannedPerArm?: number | null; mde?: number | null; decisionRule?: unknown; guardrails?: unknown }): Promise<ExperimentRow> {
+      const r = (await q(
+        `insert into experiment (campaign_id, hypothesis, lever, metric, arm_a_entry, arm_b_entry, status, created_by, expected_lift, planned_rounds, planned_per_arm, mde, decision_rule, guardrails)
+         values ($1,$2,$3,$4,$5,$6,'running',$7,$8,$9,$10,$11,coalesce($12::jsonb, '{"method": "frequentist", "alpha": 0.05, "minRelativeLift": 0.1}'::jsonb),$13) returning *`,
+        [e.campaignId, e.hypothesis, e.lever, e.metric, e.armA, e.armB, e.createdBy, e.expectedLift ?? null, e.plannedRounds ?? 1, e.plannedPerArm ?? null, e.mde ?? null,
+         e.decisionRule === undefined ? null : JSON.stringify(e.decisionRule), e.guardrails === undefined ? null : JSON.stringify(e.guardrails)],
+      ))[0];
+      await this.addRound(r.id, 1, e.armA, e.armB);
+      return (await this.experiment(r.id))!;
+    },
+    /** Attach a pair of entries as a round; the entries learn their experiment and variant (the approval card shows it). */
+    async addRound(id: string, round: number, armA: string, armB: string) {
+      await q("insert into experiment_round (experiment_id, round, arm_a_entry, arm_b_entry) values ($1,$2,$3,$4)", [id, round, armA, armB]);
+      await q("update content_calendar set experiment_id = $1, variant = case when id = $2 then 'A' else 'B' end where id = any(array[$2, $3]::text[])", [id, armA, armB]);
     },
     async experiment(id: string): Promise<ExperimentRow | null> {
       const r = (await q("select * from experiment where id = $1", [id]))[0];
-      return r ? experimentFrom(r) : null;
+      return r ? experimentFrom(r, await this.rounds(id)) : null;
+    },
+    async rounds(id: string): Promise<ExperimentRow["rounds"]> {
+      return (await q("select round, arm_a_entry, arm_b_entry from experiment_round where experiment_id = $1 order by round", [id])).map((r: any) => ({ round: r.round, armA: r.arm_a_entry, armB: r.arm_b_entry }));
     },
     async experiments(campaignId: string, status?: string): Promise<ExperimentRow[]> {
-      return (await q("select * from experiment where campaign_id = $1 and ($2::text is null or status = $2) order by created_at desc", [campaignId, status ?? null])).map(experimentFrom);
+      const rows = await q("select * from experiment where campaign_id = $1 and ($2::text is null or status = $2) order by created_at desc", [campaignId, status ?? null]);
+      return Promise.all(rows.map(async (r: any) => experimentFrom(r, await this.rounds(r.id))));
     },
     async usedArms(): Promise<Set<string>> {
-      return new Set((await q("select arm_a_entry as a, arm_b_entry as b from experiment")).flatMap((r: any) => [r.a, r.b]));
+      return new Set((await q("select arm_a_entry as a, arm_b_entry as b from experiment_round union all select arm_a_entry, arm_b_entry from experiment")).flatMap((r: any) => [r.a, r.b]));
     },
     async conclude(id: string, verdict: string, result: unknown, at: string) {
       await q("update experiment set status = 'concluded', verdict = $2, result = $3, concluded_at = $4 where id = $1 and status = 'running'", [id, verdict, result, at]);

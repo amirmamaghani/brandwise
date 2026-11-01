@@ -45,7 +45,7 @@ export type Status = (typeof STATUSES)[number];
 export type Tier = 1 | 2 | 3;
 
 export type Campaign = { id: string; parentId: string | null; rootId: string; name: string; kind: "always_on" | "campaign"; startsAt: string | null; endsAt: string | null };
-export type CalendarEntry = { id: string; campaignId: string; campaignName: string; title: string; channel: string; scheduledAt: string; tier: Tier; status: Status; assetId: string | null; createdBy: string; body: string; link: string | null; reviewNote: string | null; attempts: number; externalId: string | null; externalUrl: string | null; error: string | null; briefId: string | null; approvedAt: string | null; approvedBy: string | null };
+export type CalendarEntry = { id: string; campaignId: string; campaignName: string; title: string; channel: string; scheduledAt: string; tier: Tier; status: Status; assetId: string | null; createdBy: string; body: string; link: string | null; reviewNote: string | null; attempts: number; externalId: string | null; externalUrl: string | null; error: string | null; briefId: string | null; approvedAt: string | null; approvedBy: string | null; /** Set when the entry is an arm of an experiment (A control, B challenger). */ experimentId: string | null; variant: "A" | "B" | null };
 /** Why an entry was sent back: a closed list, so production metrics and reviewer preferences can be counted. */
 export const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "typo", "offer", "other"] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
@@ -78,7 +78,7 @@ const assertActionable = (e: CalendarEntry, now = Date.now()) => {
 };
 
 const campaignFrom = (r: any): Campaign => ({ id: r.id, parentId: r.parent_id, rootId: r.root_id, name: r.name, kind: r.kind, startsAt: r.starts_at ?? null, endsAt: r.ends_at ?? null });
-const entryFrom = (r: any): CalendarEntry => ({ id: r.id, campaignId: r.campaign_id, campaignName: r.campaign_name, title: r.title, channel: r.channel, scheduledAt: new Date(r.scheduled_at).toISOString(), tier: r.tier, status: r.status, assetId: r.asset_id, createdBy: r.created_by, body: r.body, link: r.link, reviewNote: r.review_note, attempts: r.attempts, externalId: r.external_id, externalUrl: r.external_url, error: r.error, briefId: r.brief_id ?? null, approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : null, approvedBy: r.approved_by ?? null });
+const entryFrom = (r: any): CalendarEntry => ({ id: r.id, campaignId: r.campaign_id, campaignName: r.campaign_name, title: r.title, channel: r.channel, scheduledAt: new Date(r.scheduled_at).toISOString(), tier: r.tier, status: r.status, assetId: r.asset_id, createdBy: r.created_by, body: r.body, link: r.link, reviewNote: r.review_note, attempts: r.attempts, externalId: r.external_id, externalUrl: r.external_url, error: r.error, briefId: r.brief_id ?? null, approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : null, approvedBy: r.approved_by ?? null, experimentId: r.experiment_id ?? null, variant: r.variant ?? null });
 const assetFrom = (r: any): Asset => ({ id: r.id, campaignId: r.campaign_id, name: r.name, kind: r.kind, role: r.role, origin: r.origin, storageKey: r.storage_key, sha256: r.sha256, mime: r.mime, bytes: Number(r.bytes), width: r.width, height: r.height, status: r.status, aiGenerated: r.ai_generated, provenance: r.provenance, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
 
 export function createCore(cfg: CoreConfig) {

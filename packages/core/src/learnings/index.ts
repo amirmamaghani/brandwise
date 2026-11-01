@@ -127,7 +127,7 @@ export function createLearnings(deps: { core: Core; now: () => Promise<Date>; me
   return {
     store,
     /** Called by the regulator when an experiment is concluded: the verdict becomes an E1 learning (idempotent per experiment). */
-    async fromExperiment(e: { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; verdict: string; reasons: string[]; stats: { rateA: number; rateB: number; lift: number | null; p: number } | null; arms: { delivered: number; clicks: number }[]; mde: number | null; decidedAt: string }) {
+    async fromExperiment(e: { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; verdict: string; reasons: string[]; stats: { rateA: number; rateB: number; lift: number | null; p: number } | null; arms: { delivered: number; clicks: number }[]; mde: number | null; decidedAt: string; rounds?: number }) {
       const { campaign } = await family(e.campaignId);
       const [a, b] = e.arms;
       const unsafeB = e.verdict === "A" && e.reasons.some((r) => r.startsWith("B is unsafe"));
@@ -142,7 +142,7 @@ export function createLearnings(deps: { core: Core; now: () => Promise<Date>; me
         campaignId: e.campaignId, scope: scopeOf(campaign), kind: result === "no_difference" ? "null_result" : "performance", evidence: "E1", result,
         statement: statementFor({ lever: e.lever, result, metric: e.metric, effect: e.stats?.lift ?? null, ciLow: ci?.low ?? null, ciHigh: ci?.high ?? null, nPerArm, mde: e.mde, note }),
         channel: "email", lever: e.lever, metric: e.metric, effect: e.stats?.lift ?? null, ciLow: ci?.low ?? null, ciHigh: ci?.high ?? null, nPerArm, mde: e.mde,
-        method: "A/B, two-proportion z-test", context: { hypothesis: e.hypothesis, verdict: e.verdict, p: e.stats?.p ?? null, reasons: e.reasons },
+        method: e.rounds && e.rounds > 1 ? `A/B series of ${e.rounds} rounds, Cochran-Mantel-Haenszel` : "A/B, two-proportion z-test", context: { hypothesis: e.hypothesis, verdict: e.verdict, p: e.stats?.p ?? null, reasons: e.reasons, rounds: e.rounds ?? 1 },
         experimentId: e.id, createdBy: "regulator", decidedAt: e.decidedAt,
       });
     },

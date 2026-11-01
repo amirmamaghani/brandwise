@@ -11,6 +11,7 @@ import { purge } from "../testing.ts";
 import { expectedRates } from "../email/adapters/sim-model.ts";
 import { createEmail } from "../email/index.ts";
 import { createRegulator } from "./index.ts";
+import { judge } from "./rails.ts";
 import { regulatorStore } from "./store.ts";
 
 const run = process.env.DATABASE_URL && process.env.S3_BUCKET ? test : test.skip;
@@ -38,7 +39,7 @@ async function setup(prefix: string) {
     assert.equal(out?.result, "published", out?.detail);
     return entry;
   };
-  return { core, rstore, reg, base, sendArm, before, cleanup: async () => { await rstore.setClockOffset(before); await purge(core, prefix); await core.close(); } };
+  return { core, rstore, reg, email, base, sendArm, before, cleanup: async () => { await rstore.setClockOffset(before); await purge(core, prefix); await core.close(); } };
 }
 
 const CANDIDATES = [
@@ -173,6 +174,66 @@ run("arms must have separate audiences; tasks are claimed once", async () => {
     await reg.tasks.claim(ctl.id, "author-1");
     const c = await reg.tasks.submitVariant(ctl.id, { subject: "something else entirely" }, "author-1");
     assert.equal((c.result as { subject: string }).subject, "Our October newsletter", "the control always uses the incumbent subject");
+  } finally {
+    await cleanup();
+  }
+});
+
+run("a series pools its rounds: no verdict before the last one, a pooled win where single rounds are inconclusive", async (t) => {
+  const prefix = `test-${Date.now()}-series`;
+  const { core, reg, email, base, cleanup } = await setup(prefix);
+  try {
+    const armA = await core.campaigns.add({ name: `${prefix}-arm-A`, kind: "campaign", parentId: base.id });
+    const armB = await core.campaigns.add({ name: `${prefix}-arm-B`, kind: "campaign", parentId: base.id });
+    // each round is a new send to the arm's audience: a new seed, or the simulated world would repeat the same draws
+    const send = async (arm: { id: string }, subject: string, seed: string) => {
+      await core.channels.set(arm.id, "email", { provider: "sim", from: "Test <test@example.com>", audienceSize: "600", seed });
+      const entry = await core.calendar.add({ campaignId: arm.id, title: subject, channel: "email", scheduledAt: new Date(Date.now() + (await reg.clock.now()).getTime() - Date.now() - 60_000).toISOString(), tier: 1, body: BODY });
+      assert.equal((await runDue(core, [email.connector()], 5, [arm.id])).find((o) => o.id === entry.id)?.result, "published");
+      return entry;
+    };
+    const control = "Our October newsletter", challenger = "{{first_name}}, our October newsletter";   // true +51 %
+    // A fixed scenario (the world is deterministic per seed): every round alone is too noisy, the pool is not. Over 20 seeds the pooled
+    // verdict was B in 16, a false alarm stopped one early (unsubscribes 6 against 0), and single rounds were significant in about a fifth.
+    const SEED = process.env.SERIES_SEED ?? "s4";
+    const pair = async (round: number) => [await send(armA, control, `${SEED}-a-${round}`), await send(armB, challenger, `${SEED}-b-${round}`)];
+    const [a1, b1] = await pair(1);
+    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "Addressing the reader by name lifts clicks", lever: "subject_personal: no -> yes", armA: a1.id, armB: b1.id, createdBy: "t", expectedLift: 0.5, rounds: 4 });
+    assert.deepEqual([exp.plannedRounds, exp.expectedLift, exp.rounds.length], [4, 0.5, 1]);
+    assert.deepEqual([(await core.calendar.get(b1.id))?.experimentId, (await core.calendar.get(b1.id))?.variant], [exp.id, "B"]);
+    const [early] = await pair(99);
+    await assert.rejects(reg.experiments.addRound({ experimentId: exp.id, armA: early.id, armB: b1.id }), /one experiment only|same audiences/);
+    const singles: string[] = [];
+    for (let round = 2; round <= 4; round++) {
+      await reg.clock.advance(25 * HOUR);
+      const mid = await reg.experiments.evaluate(exp.id);
+      assert.equal(mid.verdict, "next_round", `round ${round - 1}: ${mid.reasons.join(" ")}`);
+      assert.equal(mid.final, false);
+      const [a, b] = await pair(round);
+      await reg.experiments.addRound({ experimentId: exp.id, armA: a.id, armB: b.id });
+    }
+    await assert.rejects(reg.experiments.addRound({ experimentId: exp.id, armA: early.id, armB: b1.id }), /all its 4 round/);
+    await reg.clock.advance(25 * HOUR);
+    const now = await reg.clock.now();
+    for (const r of (await reg.store.experiment(exp.id))!.rounds) {
+      const arm = async (id: string) => { const s = await email.stats({ entryId: id, asOf: now.toISOString() }); return { entryId: id, sentAt: s.sends[0]!.sentAt, delivered: s.counts.delivered, clicks: s.counts.clicked.unique, complaints: s.counts.complained, unsubscribes: s.counts.unsubscribed }; };
+      const [ra, rb] = [await arm(r.armA), await arm(r.armB)];
+      t.diagnostic(`round ${r.round}: A ${ra.clicks}/${ra.delivered}  B ${rb.clicks}/${rb.delivered}`);
+      singles.push(judge(ra, rb, now, reg.rails).verdict);
+    }
+    const done = await reg.experiments.evaluate(exp.id);
+    t.diagnostic(`single rounds: ${singles.join(", ")}; pooled: ${done.verdict}: ${done.reasons[0]}`);
+    assert.equal(done.verdict, "B", done.reasons.join(" "));
+    assert.ok(singles.every((v) => v === "inconclusive"), `every round alone is inconclusive: ${singles.join(", ")}`);
+    const learned = (await reg.learnings.list(base.id)).find((l) => l.experimentId === exp.id)!;
+    assert.match(learned.method ?? "", /series of 4 rounds/);
+    assert.ok((learned.nPerArm ?? 0) > 2000, "the learning counts every round");
+
+    // the power gate: with about 590 per arm and round, a +20 % change needs more rounds than one
+    await reg.clock.advance(25 * HOUR);   // past the cooldown after the adoption
+    const [a5, b5] = await pair(5);
+    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "A small tweak of the greeting", lever: "greeting: hi -> hello", armA: a5.id, armB: b5.id, createdBy: "t", expectedLift: 0.2, rounds: 1 }), /needs \d+ rounds|not testable/);
+    await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "A small tweak of the greeting", lever: "greeting: hi -> hello", armA: a5.id, armB: b5.id, createdBy: "t", expectedLift: 0.05 }), /below the 10 %/);
   } finally {
     await cleanup();
   }

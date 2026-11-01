@@ -38,6 +38,7 @@ const entrySchema = z.object({
   body: z.string(), link: z.string().nullable(), reviewNote: z.string().nullable(),
   attempts: z.number(), externalId: z.string().nullable(), externalUrl: z.string().nullable(), error: z.string().nullable(),
   briefId: z.string().nullable(), approvedAt: z.string().nullable(), approvedBy: z.string().nullable(),
+  experimentId: z.string().nullable(), variant: z.enum(["A", "B"]).nullable(),
 });
 const learningSchema = z.object({
   id: z.string(), scope: z.string(), kind: z.string(), evidence: z.string().nullable(), result: z.string().nullable(), statement: z.string(),
@@ -153,6 +154,7 @@ export const rpcContract = defineRpcContract({
       briefId: z.string().nullable(), slot: z.string().nullable(),
       applied: z.array(z.object({ id: z.string(), mode: z.string(), statement: z.string(), evidence: z.string().nullable() })),
       attributes: z.record(z.string(), z.object({ value: z.string(), source: z.string() })),
+      experiment: z.object({ id: z.string(), hypothesis: z.string(), lever: z.string().nullable(), variant: z.string().nullable(), round: z.number(), plannedRounds: z.number(), expectedLift: z.number().nullable(), mde: z.number().nullable(), status: z.string(), verdict: z.string().nullable() }).nullable(),
     }),
   },
   learnings_list: { input: z.object({ campaignId: z.string() }), output: z.object({ learnings: z.array(learningSchema) }) },
@@ -590,7 +592,13 @@ export default async function plugin(bb: BbPluginApi) {
     },
     entry_learnings: async ({ id }) => {
       if (!learnings) throw new Error("Not configured");
-      return learnings.forEntry(id);
+      const info = await learnings.forEntry(id);
+      const entry = await need().calendar.get(id);
+      const e = entry?.experimentId && regulator ? await regulator.store.experiment(entry.experimentId) : null;
+      return {
+        ...info,
+        experiment: e ? { id: e.id, hypothesis: e.hypothesis, lever: e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : null, variant: entry!.variant, round: (e.rounds.find((r) => r.armA === id || r.armB === id)?.round) ?? 1, plannedRounds: e.plannedRounds, expectedLift: e.expectedLift, mde: e.mde, status: e.status, verdict: e.verdict } : null,
+      };
     },
     learnings_list: async ({ campaignId }) => {
       if (!learnings) throw new Error("Not configured");
@@ -802,7 +810,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
-    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" | evaluate <id> | backfill   (A/B on e-mail; the rails judge, nobody can overrule; a lever with a standing null result at this size is refused)",
+    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" --expected-lift <0.3> [--rounds n] | add-round <id> --a <entry> --b <entry> | evaluate <id> | backfill   (A/B on e-mail, registered before the first send; the rails judge, nobody can overrule; an untestable lift or a lever with a standing null result is refused)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
     "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] [--brief-id <id>] [--applies <ids>] [--tests <id>] | complete <id> [--result '<json>']",
     "  bb brandwise editor autorun   (run by a bb automation: starts the editor or the author only on campaigns with editor.autoRun and only when they have work; silent otherwise)",
@@ -840,7 +848,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));

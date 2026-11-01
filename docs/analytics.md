@@ -1,6 +1,6 @@
 # Analytics: learnings, experiments, economics, paid media
 
-Status 2026-11-01: phase 1 is built (code in `packages/core/src/learnings/`, tests in `learnings.test.ts`, `learnings.db.test.ts` and `regulator/loop.test.ts`); phases 2 to 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
+Status 2026-11-01: phases 1 and 2 are built (code in `packages/core/src/learnings/` and `packages/core/src/regulator/`, tests in `learnings.test.ts`, `learnings.db.test.ts`, `regulator.test.ts` and `loop.test.ts`); phases 3 to 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
 
 Principles stay: nothing leaves without the calendar and approval; code judges, agents read aggregates; agents get tools, never credentials; providers are adapters with contract tests; Postgres is the source of truth.
 
@@ -46,6 +46,12 @@ As built:
 - **Power gate**: refused when the expected lift is below the MDE; the answer says how many rounds would do.
 - **Series**: one hypothesis pooled over several sends (Cochran–Mantel–Haenszel), fixed horizon, no verdict before the planned rounds.
 - **Guardrails**: B rejected when significantly worse, or complaints ≥ 0.1 % with at least 2 events; freeze at 0.3 %. A guard the provider cannot measure is `unavailable`, never 0 (D1).
+
+As built:
+- Registration lives on `propose` (`--expected-lift`, `--rounds`; the CLI requires the lift), with the per-arm size, the MDE, the guards and the decision rule stored on the experiment; arm entries carry `experiment_id` and `variant`, and the approval card shows the registration.
+- Rounds are added with `editor experiments add-round`, to the same two arm campaigns, after the previous round was sent. The judge says `next_round` until the planned rounds are mature; `editor autorun` then starts the editor to write the next pair.
+- The guard rule was changed after simulation: "0.1 % with two events", looked at after every round, rejected about a quarter of good challengers in 4-round series. Complaints are now unsafe at the 0.3 % ceiling (two events) or when the lower end of their 95 % interval is above 0.1 %; "significantly worse than the control" uses p < 0.01 and three events. Both arms unsafe freezes the campaign; an unsafe control gives way to a safe challenger.
+- Pooling counts every round as new people although the arms are fixed audiences; per-round re-randomization needs the provider's contacts API (later).
 
 Done when: a 4-round series of 600 per arm reaches a pooled verdict where every round alone is inconclusive; an untestable registration is refused with the rounds needed; a variant with 0.15 % complaints is rejected although it wins on clicks.
 
