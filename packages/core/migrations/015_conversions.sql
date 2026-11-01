@@ -51,8 +51,11 @@ create table conversion_status_event (
   primary key (source_id, external_id, status)
 );
 
--- A promo code belongs to a campaign: a conversion that names it is attributed there (one model of the range).
+-- A promo code belongs to a campaign of one brand: a conversion that names it is attributed there (one model of the range). Codes are
+-- unique per brand, and a source only ever resolves codes of its own brand.
 create table promo_code (
-  code        text primary key,
-  campaign_id uuid not null references campaign(id) on delete cascade
+  root_id     uuid not null references campaign(id) on delete cascade,
+  code        text not null,
+  campaign_id uuid not null references campaign(id) on delete cascade,
+  primary key (root_id, code)
 );

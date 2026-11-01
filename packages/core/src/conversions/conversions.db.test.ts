@@ -43,10 +43,16 @@ run("a signed lead is traced to its entry once; a qualification later counts as 
     assert.equal(JSON.stringify(row.raw).includes("Example"), false);
 
     await conv.promo("spring10", child.id);
+    // another brand's codes never move a lead here: the same code there, and a code only it has
+    const rival = await core.campaigns.add({ name: `${prefix}-rival`, kind: "always_on" });
+    await conv.promo("spring10", rival.id);
+    await conv.promo("rival20", rival.id);
+    await post({ kind: "lead", id: `${prefix}-L4`, occurredAt: new Date().toISOString(), promo: "RIVAL20" });
+    assert.equal((await core.pool.query("select campaign_id from conversion where external_id = $1", [`${prefix}-L4`])).rows[0].campaign_id, null, "another brand's code attributes nothing");
     await post({ kind: "lead", id: `${prefix}-L2`, occurredAt: new Date().toISOString(), promo: "SPRING10" });
     await post({ kind: "lead", id: `${prefix}-L3`, occurredAt: new Date().toISOString(), selfReport: "your e-mail newsletter" });
     let f = await conv.funnel(child.id);
-    assert.deepEqual([f.leads, f.qualified], [{ low: 1, high: 3 }, { low: 0, high: 0 }]);
+    assert.deepEqual([f.leads, f.qualified], [{ low: 1, high: 3 }, { low: 0, high: 0 }], "SPRING10 is still ours, although the rival has a code of that name");
     assert.deepEqual((await post({ ...lead, status: "qualified" })).result, { received: 1, created: 0, updated: 1, duplicates: 0 }, "a qualification updates the lead");
     f = await conv.funnel(child.id);
     assert.deepEqual([f.leads, f.qualified], [{ low: 1, high: 3 }, { low: 1, high: 1 }], "still three leads, now one qualified");

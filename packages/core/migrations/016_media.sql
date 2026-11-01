@@ -10,7 +10,9 @@ create table media_order (
   objective    text not null default 'traffic',
   boost_of     text references content_calendar(id),            -- the published post a boost promotes
   order_of     text references media_order(entry_id),           -- the order a budget change changes
-  platform     text,                                            -- the buyer adapter, from the campaign's ads target
+  platform     text,                                            -- the buyer adapter: the campaign's ads target when the order was made
+  payment      text,                                            -- the payment method of that target (what the person approved)
+  prepaid      boolean not null default false,                  -- the account is prepaid or invoiced: no payment step
   external_id  text,
   payment_ref  text,                                            -- the payment's reference; the token itself is never stored
   status       text not null default 'draft' check (status in ('draft', 'live', 'paused', 'ended', 'refused')),

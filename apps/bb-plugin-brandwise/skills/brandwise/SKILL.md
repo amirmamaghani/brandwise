@@ -70,7 +70,7 @@ Buying ads, boosting a published post and changing a running budget are calendar
 | `bb brandwise ads list [--campaign <c>]` | Per ad: spend, CTR, CPC, frequency, fatigue, our leads, CPL (fully loaded when production is over 10 % of the spend), ROAS. Platform conversions are the platform's own count: indicative. |
 | `bb brandwise ads pause <entry>` | Stop a live ad (allowed to agents: it only stops spending). |
 
-You never see a payment method, a card or a token, you never set the limits (`config set ads.*` is refused), and you cannot approve an ad (`calendar approve` refuses channel `ads`: a person approves it on the Calendar page). Prefer big creative differences over variations, and judge an ad by our leads and their quality, not by its clicks.
+You never see a payment method, a card or a token, you never set the limits (`config set ads.*` is refused) or where a campaign buys and how it pays (`campaign channel set ads` is refused; a person sets it on Results > Paid), and you cannot approve an ad (`calendar approve` refuses channel `ads`: a person approves it on the Calendar page). Prefer big creative differences over variations, and judge an ad by our leads and their quality, not by its clicks.
 
 ## Results and costs (read-only)
 

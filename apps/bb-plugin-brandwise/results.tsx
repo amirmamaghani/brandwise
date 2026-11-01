@@ -367,6 +367,7 @@ function PaidTab({ campaigns }: { campaigns: Campaign[] }) {
         </select>
       </div>
       <p className="text-xs text-muted-foreground">Orders are tier-3 calendar entries you approve; the limits under Settings (Paid media) are checked when an order is made and again before payment. Unset limits buy nothing.</p>
+      <AdsTarget campaignId={target} />
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       {rows === null ? null : rows.length === 0 ? <p className="text-sm text-muted-foreground">No ads yet.</p> : (
         <table className="text-sm">
@@ -389,6 +390,46 @@ function PaidTab({ campaigns }: { campaigns: Campaign[] }) {
         </table>
       )}
     </div>
+  );
+}
+
+/** Where a campaign buys media and how it pays: a person's choice, set only here. Orders keep what was set when they were made. */
+function AdsTarget({ campaignId }: { campaignId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [data, setData] = useState<{ target: Record<string, string> | null; platforms: { id: string; requiresPayment: boolean }[]; payments: string[] } | null>(null);
+  const [form, setForm] = useState({ provider: "", payment: "", prepaid: false });
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = useCallback(() => {
+    if (!campaignId) return;
+    rpc.call("ads_target", { campaignId }).then((r) => { setData(r); setForm({ provider: r.target?.provider ?? r.platforms[0]?.id ?? "", payment: r.target?.payment ?? r.payments[0] ?? "", prepaid: r.target?.prepaid === "true" }); }, (e) => setMsg(String(e?.message ?? e)));
+  }, [campaignId, rpc]);
+  useEffect(load, [load]);
+  if (!data) return null;
+  if (data.platforms.length === 0) return <p className="text-xs text-muted-foreground">No ads platform is configured on this installation.</p>;
+  const needsPayment = data.platforms.find((p) => p.id === form.provider)?.requiresPayment && !form.prepaid;
+  const save = async (clear = false) => {
+    try {
+      await rpc.call("ads_target_set", { campaignId, target: clear ? null : { provider: form.provider, payment: needsPayment ? form.payment : null, prepaid: form.prepaid } });
+      setMsg(clear ? "Removed: new orders are refused until a platform is set." : "Saved. New orders use it; orders made before keep theirs."); load();
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <section className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="font-medium">Buys on</span>
+      <select className={SELECT} value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })} aria-label="Ads platform">
+        {data.platforms.map((p) => <option key={p.id} value={p.id}>{p.id}</option>)}
+      </select>
+      <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={form.prepaid} onChange={(e) => setForm({ ...form, prepaid: e.target.checked })} /> prepaid or invoiced account</label>
+      {needsPayment ? (
+        <select className={SELECT} value={form.payment} onChange={(e) => setForm({ ...form, payment: e.target.value })} aria-label="Payment method">
+          {data.payments.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      ) : null}
+      <Button size="sm" disabled={!form.provider || (needsPayment && !form.payment)} onClick={() => save()}>Save</Button>
+      {data.target ? <Button size="sm" variant="outline" onClick={() => save(true)}>Remove</Button> : null}
+      <span className="text-xs text-muted-foreground">{data.target ? `Now: ${data.target.provider}${data.target.prepaid === "true" ? ", prepaid" : data.target.payment ? `, paid with ${data.target.payment}` : ""}` : "Not set for this campaign (or inherited from its brand)"}</span>
+      {msg ? <span className="text-xs text-muted-foreground">{msg}</span> : null}
+    </section>
   );
 }
 

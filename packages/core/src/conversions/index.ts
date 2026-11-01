@@ -39,7 +39,8 @@ export function createConversions(deps: { core: Core; salt: string; /** the plug
       const ref = entryRef(e);
       const entry = ref ? (await q("select c.id, c.campaign_id, p.root_id from content_calendar c join campaign p on p.id = c.campaign_id where c.id = $1", [ref]))[0] : undefined;
       const sameBrand = entry && entry.root_id === src.root_id;
-      const promo = e.promoCode ? (await q("select campaign_id from promo_code where code = $1", [e.promoCode]))[0]?.campaign_id ?? null : null;
+      // promo codes of the source's own brand only: another brand's code never moves a lead here
+      const promo = e.promoCode ? (await q("select campaign_id from promo_code where root_id = $1 and code = $2", [src.root_id, e.promoCode]))[0]?.campaign_id ?? null : null;
       const before = (await q("select status, version from conversion where source_id = $1 and external_id = $2", [sourceId, e.externalId]))[0];
       if (before && before.status === e.status) { duplicates++; continue; }
       await q(
@@ -92,8 +93,10 @@ export function createConversions(deps: { core: Core; salt: string; /** the plug
     async importCsv(sourceId: string, text: string, mapping: Record<string, string>, defaults: { kind?: "lead" | "order" } = {}) {
       return ingest(sourceId, parseCsv(text, mapping, defaults));
     },
+    /** A person's action: a promo code of a campaign, unique within its brand. */
     async promo(code: string, campaignId: string) {
-      await q("insert into promo_code (code, campaign_id) values ($1,$2) on conflict (code) do update set campaign_id = excluded.campaign_id", [code.trim().toUpperCase(), campaignId]);
+      const { root } = await rootOf(campaignId);
+      await q("insert into promo_code (root_id, code, campaign_id) values ($1,$2,$3) on conflict (root_id, code) do update set campaign_id = excluded.campaign_id", [root.id, code.trim().toUpperCase(), campaignId]);
     },
     measured,
 
@@ -112,7 +115,7 @@ export function createConversions(deps: { core: Core; salt: string; /** the plug
       const until = await deps.now(), since = new Date(until.getTime() - (opts.sinceDays ?? 30) * 24 * HOUR);
       const rows = await q(
         `select c.*, e.campaign_id as entry_campaign, e.channel, pc.campaign_id as promo_campaign from conversion c
-         left join content_calendar e on e.id = c.entry_id left join promo_code pc on pc.code = c.promo_code
+         left join content_calendar e on e.id = c.entry_id left join promo_code pc on pc.root_id = c.root_id and pc.code = c.promo_code
          where c.root_id = $1 and c.occurred_at >= $2 and c.occurred_at < $3`, [root.id, since.toISOString(), until.toISOString()]);
       const channels = [...new Set((await q("select distinct channel from content_calendar where campaign_id = any($1::uuid[])", [[...ids]])).map((r: any) => r.channel as string))];
       const reached = async (status: string) => new Set((await q("select e.external_id, e.source_id from conversion_status_event e join conversion c using (source_id, external_id) where e.status = $1 and c.root_id = $2", [status, root.id])).map((r: any) => `${r.source_id}:${r.external_id}`));

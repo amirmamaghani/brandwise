@@ -29,15 +29,18 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
   try {
     const base = await core.campaigns.add({ name: `${prefix}-base`, kind: "always_on" });
     const child = await core.campaigns.add({ name: `${prefix}-spring`, kind: "campaign", parentId: base.id });
-    await core.channels.set(child.id, "ads", { provider: "mock-ads", payment: "mock-pay" });
     const at = new Date(Date.now() + 60_000).toISOString();
+    await assert.rejects(media.create({ campaignId: child.id, name: "x", body: "x", action: "media_buy", budget: 10, days: 1, at, createdBy: "agent" }), /no ads platform/, "no platform set by a person: no order");
+    await assert.rejects(media.setTarget(child.id, { provider: "mock-ads" }), /pick a payment method/);
+    await assert.rejects(media.setTarget(child.id, { provider: "other-ads", prepaid: true }), /No ads platform/);
+    await media.setTarget(child.id, { provider: "mock-ads", payment: "mock-pay" });
     await assert.rejects(core.calendar.add({ campaignId: child.id, title: "x", channel: "ads", scheduledAt: at, tier: 2, body: "x" }), /always tier 3/);
     const order = (budget: number, days: number, extra: Record<string, unknown> = {}) => media.create({ campaignId: child.id, name: "Spring ad", body: "Three ideas for spring", link: "https://example.com/spring", action: "media_buy", budget, days, at, createdBy: "agent", ...extra });
 
     await assert.rejects(order(200, 10), /per order. Nothing was bought or paid/);
     const first = await order(70, 7);   // 10 a day
     outputs.push(first);
-    assert.deepEqual([first.entry.tier, first.entry.status, first.order.status], [3, "pending_approval", "draft"]);
+    assert.deepEqual([first.entry.tier, first.entry.status, first.order.status, first.order.platform, first.order.payment, first.order.prepaid], [3, "pending_approval", "draft", "mock-ads", "mock-pay", false], "the order keeps the platform and payment the person will approve");
     await assert.rejects(order(100, 4), /daily limit/, "25 a day more would pass the daily limit of 30");
     await assert.rejects(media.create({ campaignId: child.id, name: "Boost", body: "x", action: "boost", budget: 10, days: 1, boostOf: first.entry.id, at, createdBy: "agent" }), /published post/);
     assert.equal(payments.charges.length, 0, "nothing was paid for refused orders");
@@ -57,6 +60,8 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
 
     // approved, then the limits are lowered: the connector checks again before any money moves
     await core.calendar.decide(first.entry.id, "approve", "ui", 60);
+    // a later change of the live target (say, to a prepaid account that skips payment) does not change how an approved order is bought
+    await core.channels.set(child.id, "ads", { provider: "mock-ads", prepaid: "true" });
     limits.maxPerOrder = 50;
     clock.t = Date.parse(at) + 1000;
     const due = async () => { const r = await runDue(core, [media.connector()], 5, [child.id]); outputs.push(r); return r; };
@@ -68,9 +73,9 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
     const published = (await due()).find((o) => o.id === first.entry.id)!;
     assert.equal(published.result, "published", published.detail);
     // a retry of the same entry (a crash after buying) buys and pays once
-    const again = await media.connector().publish({ idempotencyKey: `bw-${first.entry.id}`, entry: (await core.calendar.get(first.entry.id))!, target: { provider: "mock-ads", payment: "mock-pay" }, asset: null });
+    const again = await media.connector().publish({ idempotencyKey: `bw-${first.entry.id}`, entry: (await core.calendar.get(first.entry.id))!, target: { provider: "nowhere", prepaid: "true" }, asset: null });
     outputs.push(again);
-    assert.deepEqual([buyer.creates, payments.charges.length, payments.charges[0].amount], [1, 1, 70]);
+    assert.deepEqual([buyer.creates, payments.charges.length, payments.charges[0].amount], [1, 1, 70], "bought once and paid as approved, with the order's payment method");
     const row = (await core.pool.query("select * from media_order where entry_id = $1", [first.entry.id])).rows[0];
     assert.deepEqual([row.status, row.platform, String(row.payment_ref).startsWith("auth_")], ["live", "mock-ads", true]);
     assert.match([...buyer.orders.values()][0].link ?? "", /utm_medium=paid.*utm_content=/, "the ad's link names its entry");

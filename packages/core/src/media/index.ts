@@ -13,8 +13,8 @@ export type { MediaBuyer, PaymentProvider, Limits } from "./domain.ts";
 export { mockBuyer, mockPayments } from "./adapters/mock.ts";
 
 const DAY = 86_400_000;
-export type OrderRow = { entryId: string; action: "media_buy" | "boost" | "budget_change"; budget: number; currency: string; days: number; objective: string; boostOf: string | null; orderOf: string | null; platform: string | null; externalId: string | null; paymentRef: string | null; status: string; createdBy: string; createdAt: string };
-const orderFrom = (r: any): OrderRow => ({ entryId: r.entry_id, action: r.action, budget: Number(r.budget), currency: r.currency, days: r.days, objective: r.objective, boostOf: r.boost_of, orderOf: r.order_of, platform: r.platform, externalId: r.external_id, paymentRef: r.payment_ref, status: r.status, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
+export type OrderRow = { entryId: string; action: "media_buy" | "boost" | "budget_change"; budget: number; currency: string; days: number; objective: string; boostOf: string | null; orderOf: string | null; platform: string | null; payment: string | null; prepaid: boolean; externalId: string | null; paymentRef: string | null; status: string; createdBy: string; createdAt: string };
+const orderFrom = (r: any): OrderRow => ({ entryId: r.entry_id, action: r.action, budget: Number(r.budget), currency: r.currency, days: r.days, objective: r.objective, boostOf: r.boost_of, orderOf: r.order_of, platform: r.platform, payment: r.payment ?? null, prepaid: r.prepaid === true, externalId: r.external_id, paymentRef: r.payment_ref, status: r.status, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString() });
 
 export function createMedia(deps: {
   core: Core; economics: Economics; conversions?: Conversions; buyers: MediaBuyer[]; payments: PaymentProvider[];
@@ -92,9 +92,16 @@ export function createMedia(deps: {
         if (!(await sameBrand(input.campaignId, prev.entryId))) throw new Error("A budget change changes an order of the same brand");
       }
       await ensureLimits(input.campaignId, { budget: input.budget, days: input.days, currency });
+      // the platform and the payment method are fixed in the order now, so the person approves exactly how it will be bought
+      const target = await core.channels.get(input.campaignId, "ads");
+      const buyer = deps.buyers.find((b) => b.id === target?.provider);
+      if (!buyer) throw new Error(`The campaign has no ads platform${target?.provider ? ` "${target.provider}" that is configured` : ""}: a person sets it on the Results page (Paid)`);
+      const prepaid = target?.prepaid === "true";
+      if (buyer.requiresPayment && !prepaid && !deps.payments.some((p) => p.id === target?.payment)) throw new Error(`${buyer.id} takes payment per order: a person sets a payment method on the Results page (Paid)`);
+      if (input.action === "budget_change" && (await order(input.orderOf!))?.platform !== buyer.id) throw new Error("A budget change goes to the platform of the order it changes");
       const entry = await core.calendar.add({ campaignId: input.campaignId, title: input.name, channel: "ads", scheduledAt: input.at, tier: 3, body: input.body, link: input.link ?? null, assetId: input.assetId ?? null, createdBy: input.createdBy });
-      await q(`insert into media_order (entry_id, action, budget, currency, days, objective, boost_of, order_of, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [entry.id, input.action, input.budget, currency, input.days, input.objective ?? "traffic", input.boostOf ?? null, input.orderOf ?? null, input.createdBy]);
+      await q(`insert into media_order (entry_id, action, budget, currency, days, objective, boost_of, order_of, platform, payment, prepaid, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [entry.id, input.action, input.budget, currency, input.days, input.objective ?? "traffic", input.boostOf ?? null, input.orderOf ?? null, buyer.id, prepaid ? null : target?.payment ?? null, prepaid, input.createdBy]);
       return { entry, order: (await order(entry.id))! };
     },
 
@@ -102,21 +109,22 @@ export function createMedia(deps: {
     connector(): Connector {
       return {
         id: "ads", channels: ["ads"],
-        targetHint: "bb brandwise campaign channel set ads provider=mock-ads [payment=mock-pay] [prepaid=true]",
-        async publish({ entry, target, asset, idempotencyKey }) {
+        targetHint: "a person sets the campaign's ads platform on the Results page (Paid)",
+        // the live target only decides whether the channel is set up at all; platform and payment come from the order as approved
+        async publish({ entry, asset, idempotencyKey }) {
           const o = await order(entry.id);
           if (!o) throw new Error(`Entry ${entry.id} has no media order`);
           // money moves only for what a person approved on a page, and only for the brand's own posts and orders
           if (entry.approvedBy !== "ui") throw new Error(`Entry ${entry.id} was not approved by a person in the UI: nothing is bought`);
           for (const ref of [o.boostOf, o.orderOf]) if (ref && !(await sameBrand(entry.campaignId, ref))) throw new Error(`Entry ${ref} belongs to another brand: nothing is bought`);
-          const buyer = deps.buyers.find((b) => b.id === target?.provider);
-          if (!buyer) throw new Error(`No ads platform "${target?.provider ?? ""}" is configured`);
+          const buyer = deps.buyers.find((b) => b.id === o.platform);
+          if (!buyer) throw new Error(`The order's ads platform "${o.platform ?? ""}" is not configured: nothing is bought`);
           await ensureLimits(entry.campaignId, o, entry.id);   // limits may have changed since the order was made
           // the token is created here, handed to the platform and dropped: only its reference is stored
           const pay = async (amount: number): Promise<PaymentToken | null> => {
-            if (!buyer.requiresPayment || target?.prepaid === "true" || amount <= 0) return null;
-            const method = deps.payments.find((p) => p.id === target?.payment);
-            if (!method) throw new Error(`${buyer.id} takes payment per order: set a payment method on the campaign's ads target (payment=...)`);
+            if (!buyer.requiresPayment || o.prepaid || amount <= 0) return null;
+            const method = deps.payments.find((p) => p.id === o.payment);
+            if (!method) throw new Error(`The order's payment method "${o.payment ?? ""}" is not configured: nothing is paid`);
             const token = await method.authorize({ seller: buyer.id, amount, currency: o.currency, reference: idempotencyKey });
             await q("update media_order set payment_ref = $2 where entry_id = $1", [entry.id, token.reference]);
             return token;
@@ -124,6 +132,7 @@ export function createMedia(deps: {
           const link = entry.link ? withUtm(entry.link, { entryId: entry.id, campaign: campaignSlug(entry.campaignName), medium: "paid", source: buyer.id }) : null;
           if (o.action === "budget_change") {
             const prev = (await order(o.orderOf!))!;
+            if (prev.platform !== buyer.id) throw new Error(`Order ${prev.entryId} runs on ${prev.platform}, not ${buyer.id}: nothing is bought`);
             await buyer.setBudget(prev.externalId!, o.budget, await pay(o.budget - prev.budget));
             await q("update media_order set budget = $2, updated_at = now() where entry_id = $1", [prev.entryId, o.budget]);
             await q("update media_order set status = 'ended', platform = $2, external_id = $3, updated_at = now() where entry_id = $1", [entry.id, buyer.id, prev.externalId]);
@@ -162,6 +171,17 @@ export function createMedia(deps: {
         if (Date.parse(o.createdAt) + (o.days + 1) * DAY < now.getTime()) await q("update media_order set status = 'ended', updated_at = now() where entry_id = $1", [o.entryId]);
       }
       return { orders: live.length, points };
+    },
+
+    /** Platforms and payment methods this installation has, for the person who sets a campaign's ads target. */
+    options: () => ({ platforms: deps.buyers.map((b) => ({ id: b.id, requiresPayment: b.requiresPayment })), payments: deps.payments.map((p) => p.id) }),
+    /** A person's action (UI only): where a campaign buys media and how it pays. Orders keep what was set when they were made. */
+    async setTarget(campaignId: string, t: { provider: string; payment?: string | null; prepaid?: boolean } | null) {
+      if (t === null) { await core.channels.unset(campaignId, "ads"); return; }
+      const buyer = deps.buyers.find((b) => b.id === t.provider);
+      if (!buyer) throw new Error(`No ads platform "${t.provider}" is configured`);
+      if (buyer.requiresPayment && !t.prepaid && !deps.payments.some((p) => p.id === t.payment)) throw new Error(`${buyer.id} takes payment per order: pick a payment method, or mark the account prepaid`);
+      await core.channels.set(campaignId, "ads", t.prepaid ? { provider: buyer.id, prepaid: "true" } : { provider: buyer.id, payment: t.payment! });
     },
 
     /** Stop an ad (a protective action: anyone who may read the campaign may pause it). */

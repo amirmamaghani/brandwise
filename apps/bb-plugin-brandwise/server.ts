@@ -156,6 +156,9 @@ export const rpcContract = defineRpcContract({
   economics_get: { input: z.object({ campaignId: z.string() }), output: z.object({ economics: z.any() }) },
   results_funnel: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ funnel: z.any() }) },
   ads_results: { input: z.object({ campaignId: z.string() }), output: z.object({ ads: z.array(z.any()) }) },
+  /** A person's action: where a campaign buys media and how it pays (the CLI refuses the ads channel). */
+  ads_target: { input: z.object({ campaignId: z.string() }), output: z.object({ target: z.record(z.string(), z.string()).nullable(), platforms: z.array(z.object({ id: z.string(), requiresPayment: z.boolean() })), payments: z.array(z.string()) }) },
+  ads_target_set: { input: z.object({ campaignId: z.string(), target: z.object({ provider: z.string(), payment: z.string().nullable().optional(), prepaid: z.boolean().optional() }).nullable() }), output: z.object({ ok: z.boolean() }) },
   conversion_sources: { input: z.object({ campaignId: z.string() }), output: z.object({ sources: z.array(z.object({ id: z.string(), name: z.string(), adapter: z.string(), received: z.number(), createdAt: z.string() })) }) },
   /** A person's actions: add a lead source (the signing secret is shown once), import a CSV export, map a promo code to a campaign. */
   conversion_source_add: { input: z.object({ campaignId: z.string(), name: z.string().trim().min(1).max(120), adapter: z.enum(["generic", "csv"]) }), output: z.object({ id: z.string(), secret: z.string().nullable(), path: z.string() }) },
@@ -171,7 +174,7 @@ export const rpcContract = defineRpcContract({
       briefId: z.string().nullable(), slot: z.string().nullable(),
       applied: z.array(z.object({ id: z.string(), mode: z.string(), statement: z.string(), evidence: z.string().nullable() })),
       attributes: z.record(z.string(), z.object({ value: z.string(), source: z.string() })),
-      media: z.object({ action: z.string(), budget: z.number(), currency: z.string(), days: z.number(), status: z.string(), platform: z.string().nullable(), boostOf: z.string().nullable() }).nullable(),
+      media: z.object({ action: z.string(), budget: z.number(), currency: z.string(), days: z.number(), status: z.string(), platform: z.string().nullable(), payment: z.string().nullable(), boostOf: z.string().nullable() }).nullable(),
       experiment: z.object({ id: z.string(), hypothesis: z.string(), lever: z.string().nullable(), variant: z.string().nullable(), round: z.number(), plannedRounds: z.number(), expectedLift: z.number().nullable(), mde: z.number().nullable(), status: z.string(), verdict: z.string().nullable() }).nullable(),
     }),
   },
@@ -668,7 +671,7 @@ export default async function plugin(bb: BbPluginApi) {
       const mo = entry?.channel === "ads" && media ? await media.order(id) : null;
       return {
         ...info,
-        media: mo ? { action: mo.action, budget: mo.budget, currency: mo.currency, days: mo.days, status: mo.status, platform: mo.platform, boostOf: mo.boostOf } : null,
+        media: mo ? { action: mo.action, budget: mo.budget, currency: mo.currency, days: mo.days, status: mo.status, platform: mo.platform, payment: mo.prepaid ? "prepaid account" : mo.payment, boostOf: mo.boostOf } : null,
         experiment: e ? { id: e.id, hypothesis: e.hypothesis, lever: e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : null, variant: entry!.variant, round: (e.rounds.find((r) => r.armA === id || r.armB === id)?.round) ?? 1, plannedRounds: e.plannedRounds, expectedLift: e.expectedLift, mde: e.mde, status: e.status, verdict: e.verdict } : null,
       };
     },
@@ -683,6 +686,8 @@ export default async function plugin(bb: BbPluginApi) {
     economics_get: async ({ campaignId }) => ({ economics: await economics().economics(campaignId) }),
     results_funnel: async ({ campaignId, sinceDays }) => ({ funnel: await economics().funnel(campaignId, { sinceDays }) }),
     ads_results: async ({ campaignId }) => ({ ads: await ads().results(campaignId) }),
+    ads_target: async ({ campaignId }) => ({ target: await need().channels.get(campaignId, "ads"), ...ads().options() }),
+    ads_target_set: async ({ campaignId, target }) => { await ads().setTarget(campaignId, target); return { ok: true }; },
     conversion_sources: async ({ campaignId }) => ({ sources: (await conv().sources.list(campaignId)).map((s) => ({ id: s.id, name: s.name, adapter: s.adapter, received: s.received, createdAt: s.createdAt })) }),
     conversion_source_add: async ({ campaignId, name, adapter }) => {
       const r = await conv().sources.create({ campaignId, name, adapter, createdBy: "ui" });
@@ -1174,6 +1179,8 @@ export default async function plugin(bb: BbPluginApi) {
             return reply(own, own.map((o) => `${o.channel}  ${JSON.stringify(o.config)}`).join("\n") || `${target.name}: no channel targets of its own (a parent campaign's apply).`);
           }
           if (!channel || (sub !== "set" && sub !== "unset")) return { exitCode: 1, stderr: usage };
+          // where money is spent and how it is paid is a person's choice, made on the Results page (Paid), never on the command line
+          if (channel === "ads") return { exitCode: 1, stderr: "The ads platform and payment method are set by a person on the Results page (Paid), not on the command line" };
           if (sub === "unset") return reply({ removed: await c.channels.unset(target.id, channel) }, `${target.name}: ${channel} target removed`);
           const config = Object.fromEntries(pairs.map((p) => { const i = p.indexOf("="); return i > 0 ? [p.slice(0, i), p.slice(i + 1)] : [p, ""]; }));
           if (Object.keys(config).length === 0 || Object.values(config).some((x) => x === "")) return { exitCode: 1, stderr: usage };
