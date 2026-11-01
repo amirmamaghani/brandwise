@@ -9,7 +9,7 @@ import { resendCapabilities, resendProvider } from "./adapters/resend.ts";
 import { runContract } from "./contract.ts";
 import { eventsToCounts } from "./domain/counts.ts";
 import { commonCapabilities, computeMetrics, METRICS } from "./domain/metrics.ts";
-import { renderEmail, withUtm } from "./domain/render.ts";
+import { renderEmail, tagText, withUtm } from "./domain/render.ts";
 import { recipientHasher } from "./index.ts";
 
 const recipient = recipientHasher("test-salt");
@@ -58,6 +58,14 @@ test("render: text becomes escaped paragraphs with the unsubscribe tag; html kee
   const r = renderEmail({ body: "Hi <b>\n\nSecond", link: "https://example.com/p?a=1", entryId: "e1", unsubscribeTag: "{{TAG}}" });
   assert.match(r.html, /<p>Hi &lt;b&gt;<\/p>/);
   assert.match(r.html, /utm_campaign=e1/);
+  assert.match(r.html, /utm_content=e1/, "the entry id is in utm_content (docs/analytics.md D6)");
+  const tagged = renderEmail({ body: '<p><a href="https://e.com/a?x=1">A</a> <a href="{{{RESEND_UNSUBSCRIBE_URL}}}">u</a> <a href="mailto:a@b.c">m</a> <a href="https://e.com/{{token}}">t</a></p>', link: null, entryId: "e2", unsubscribeTag: "{{{RESEND_UNSUBSCRIBE_URL}}}", campaign: "spring" });
+  assert.match(tagged.html, /href="https:\/\/e\.com\/a\?x=1&amp;utm_source=brandwise&amp;utm_medium=email&amp;utm_campaign=spring&amp;utm_content=e2"/, "HTML and template bodies are tagged too");
+  assert.ok(tagged.html.includes('href="{{{RESEND_UNSUBSCRIBE_URL}}}"') && tagged.html.includes('href="mailto:a@b.c"') && tagged.html.includes('href="https://e.com/{{token}}"'), "merge tokens, mailto and the unsubscribe link stay as they are");
+  assert.match(renderEmail({ body: "See https://e.com/x today", link: null, entryId: "e3", unsubscribeTag: "{{u}}" }).html, /https:\/\/e\.com\/x\?utm_source=brandwise.*utm_content=e3/, "bare URLs in plain text too");
+  const tail = tagText("Sale at https://shop.com/sale. Or https://shop.com/b?x=1, then (https://shop.com/c)!", { entryId: "e4" });
+  assert.match(tail, /https:\/\/shop\.com\/sale\?utm_source=[^\s]*utm_content=e4\. Or/, "a full stop after a link stays outside it");
+  assert.match(tail, /x=1&utm_source=[^\s,]*utm_content=e4, then \(https:\/\/shop\.com\/c\?[^\s)]*\)!$/, "commas and closing brackets too");
   assert.ok(r.html.includes("{{TAG}}") && r.text.includes("{{TAG}}"));
   assert.ok(renderEmail({ body: "<p>x</p>", link: null, entryId: "e", unsubscribeTag: "{{TAG}}" }).html.includes("{{TAG}}"), "footer added to html without one");
   assert.equal(renderEmail({ body: "<p>{{TAG}}</p>", link: null, entryId: "e", unsubscribeTag: "{{TAG}}" }).html, "<p>{{TAG}}</p>");

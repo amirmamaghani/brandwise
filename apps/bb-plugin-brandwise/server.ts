@@ -4,13 +4,13 @@
 // Approved entries are fired by `calendar run-due`, which a bb automation runs every minute (infra/bb-instance/provision.sh).
 import { defineRpcContract, type BbPluginApi, type PluginSettingDescriptor } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
+import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, REVIEW_REASONS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
 import { randomBytes } from "node:crypto";
 import * as cp from "node:child_process";
 import * as fsx from "node:fs";
 import * as osx from "node:os";
 import * as px from "node:path";
-import { agentContract, createAgents } from "./agents.ts";
+import { agentContract, createAgents, spawnAgentThread } from "./agents.ts";
 import { productCli } from "./product.ts";
 import { createVideo, videoContract } from "./video.ts";
 import { createEmailTemplates, templatesContract } from "./email-templates.ts";
@@ -20,6 +20,12 @@ import { createEmail } from "./core/email/index.ts";
 import { createRegulator } from "./core/regulator/index.ts";
 import { regulatorStore } from "./core/regulator/store.ts";
 import { createEditorCli } from "./editor.ts";
+import { createLearnings, emailMeasure } from "./core/learnings/index.ts";
+import { createLearningsCli } from "./learnings-cli.ts";
+import { createEconomics } from "./core/economics/index.ts";
+import { createConversions } from "./core/conversions/index.ts";
+import { createMedia, mockBuyer, mockPayments } from "./core/media/index.ts";
+import { createResultsCli } from "./results-cli.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
 
@@ -35,6 +41,13 @@ const entrySchema = z.object({
   scheduledAt: z.string(), tier: tierSchema, status: z.enum(STATUSES), assetId: z.string().nullable(), createdBy: z.string(),
   body: z.string(), link: z.string().nullable(), reviewNote: z.string().nullable(),
   attempts: z.number(), externalId: z.string().nullable(), externalUrl: z.string().nullable(), error: z.string().nullable(),
+  briefId: z.string().nullable(), approvedAt: z.string().nullable(), approvedBy: z.string().nullable(),
+  experimentId: z.string().nullable(), variant: z.enum(["A", "B"]).nullable(),
+});
+const learningSchema = z.object({
+  id: z.string(), scope: z.string(), kind: z.string(), evidence: z.string().nullable(), result: z.string().nullable(), statement: z.string(),
+  channel: z.string().nullable(), status: z.string(), effectiveStatus: z.string(), contrary: z.number(), createdBy: z.string(),
+  confirmedBy: z.string().nullable(), decidedAt: z.string(), sourceIds: z.array(z.string()),
 });
 const UI_STATUSES = ["draft", "linted", "approved", "archived"] as const;
 const creativeSchema = z.object({
@@ -137,8 +150,38 @@ export const rpcContract = defineRpcContract({
     output: entrySchema,
   },
   calendar_unapprove: { input: z.object({ id: z.string() }), output: entrySchema },
-  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000) }), output: entrySchema },
-  calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]) }), output: entrySchema },
+  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000), reason: z.enum(REVIEW_REASONS).nullable().optional(), reviewSeconds: z.number().min(0).max(86_400).nullable().optional() }), output: entrySchema },
+  /** Costs, creative economics per format, production, and the brand's economics profile (Results page). */
+  results_costs: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ report: z.any() }) },
+  economics_get: { input: z.object({ campaignId: z.string() }), output: z.object({ economics: z.any() }) },
+  results_funnel: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ funnel: z.any() }) },
+  ads_results: { input: z.object({ campaignId: z.string() }), output: z.object({ ads: z.array(z.any()) }) },
+  /** A person's action: where a campaign buys media and how it pays (the CLI refuses the ads channel). */
+  ads_target: { input: z.object({ campaignId: z.string() }), output: z.object({ target: z.record(z.string(), z.string()).nullable(), platforms: z.array(z.object({ id: z.string(), requiresPayment: z.boolean() })), payments: z.array(z.string()) }) },
+  ads_target_set: { input: z.object({ campaignId: z.string(), target: z.object({ provider: z.string(), payment: z.string().nullable().optional(), prepaid: z.boolean().optional() }).nullable() }), output: z.object({ ok: z.boolean() }) },
+  conversion_sources: { input: z.object({ campaignId: z.string() }), output: z.object({ sources: z.array(z.object({ id: z.string(), name: z.string(), adapter: z.string(), received: z.number(), createdAt: z.string() })) }) },
+  /** A person's actions: add a lead source (the signing secret is shown once), import a CSV export, map a promo code to a campaign. */
+  conversion_source_add: { input: z.object({ campaignId: z.string(), name: z.string().trim().min(1).max(120), adapter: z.enum(["generic", "csv"]) }), output: z.object({ id: z.string(), secret: z.string().nullable(), path: z.string() }) },
+  conversion_import: { input: z.object({ sourceId: z.string(), csv: z.string().max(5_000_000), mapping: z.record(z.string(), z.string()), kind: z.enum(["lead", "order"]) }), output: z.object({ result: z.any() }) },
+  promo_set: { input: z.object({ code: z.string().trim().min(2).max(40), campaignId: z.string() }), output: z.object({ ok: z.boolean() }) },
+  /** A person's actions: set the economics profile, state a cost (media spend, an incentive, a tool, sales cost). */
+  economics_set: { input: z.object({ campaignId: z.string(), profile: z.record(z.string(), z.unknown()) }), output: z.object({ ok: z.boolean() }) },
+  cost_add: { input: z.object({ campaignId: z.string(), kind: z.enum(["media", "incentive", "tool", "sales"]), amount: z.number().min(0), ref: z.string().trim().min(1).max(120), note: z.string().max(500).optional(), entryId: z.string().nullable().optional() }), output: z.object({ ok: z.boolean() }) },
+  /** What an entry was written from: its brief, the learnings it applies or tests, its attributes (the approval card). */
+  entry_learnings: {
+    input: z.object({ id: z.string() }),
+    output: z.object({
+      briefId: z.string().nullable(), slot: z.string().nullable(),
+      applied: z.array(z.object({ id: z.string(), mode: z.string(), statement: z.string(), evidence: z.string().nullable() })),
+      attributes: z.record(z.string(), z.object({ value: z.string(), source: z.string() })),
+      media: z.object({ action: z.string(), budget: z.number(), currency: z.string(), days: z.number(), status: z.string(), platform: z.string().nullable(), payment: z.string().nullable(), boostOf: z.string().nullable() }).nullable(),
+      experiment: z.object({ id: z.string(), hypothesis: z.string(), lever: z.string().nullable(), variant: z.string().nullable(), round: z.number(), plannedRounds: z.number(), expectedLift: z.number().nullable(), mde: z.number().nullable(), status: z.string(), verdict: z.string().nullable() }).nullable(),
+    }),
+  },
+  learnings_list: { input: z.object({ campaignId: z.string() }), output: z.object({ learnings: z.array(learningSchema) }) },
+  /** A person's actions on a learning: confirm a proposed reviewer preference, or retire a learning. */
+  learning_set_status: { input: z.object({ id: z.string(), action: z.enum(["confirm", "retire"]) }), output: z.object({ ok: z.boolean() }) },
+  calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]), reviewSeconds: z.number().min(0).max(86_400).nullable().optional() }), output: entrySchema },
   creatives_list: { input: z.null(), output: z.object({ creatives: z.array(creativeSchema) }) },
   creatives_upload: {
     input: z.object({ campaignId: z.string(), filename: z.string().trim().min(1).max(200), dataBase64: z.string().min(1).max(14_000_000) }),
@@ -289,30 +332,112 @@ export default async function plugin(bb: BbPluginApi) {
     return core;
   };
   // E-mail: providers with credentials, events in, statistics out (core/email). The salt makes the stored recipient hashes ours alone.
-  const emailSalt = (await bb.storage.kv.get<string>("email_salt")) ?? (await (async () => { const s = randomUUID(); await bb.storage.kv.set("email_salt", s); return s; })());
-  const email = core === null ? null : createEmail({
-    pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
-    sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
+  // The salt lives in Postgres with the data it protects (docs/analytics.md D6): losing bb KV must not change every recipient hash.
+  // An install from before keeps its KV salt, copied over once.
+  // KV keeps a mirror, so a database that is down at start never leads to a new random salt (which would never match the stored hashes).
+  const emailSalt = await (async () => {
+    const kv = await bb.storage.kv.get<string>("email_salt");
+    const mirror = async (s: string) => { if (kv !== s) await bb.storage.kv.set("email_salt", s); return s; };
+    const read = async () => (await core!.pool.query("select value from installation where key = 'email.salt'")).rows[0]?.value as string | undefined;
+    if (core !== null) {
+      try {
+        const stored = await read();
+        if (stored) return mirror(stored);
+        await core.pool.query("insert into installation (key, value) values ('email.salt', $1) on conflict (key) do nothing", [kv ?? randomUUID()]);
+        return mirror((await read())!);
+      } catch (cause) {
+        bb.log.warn(`installation salt not readable from the database (${cause instanceof Error ? cause.message : String(cause)}); using the mirrored one`);
+      }
+    }
+    // no database (yet): the mirror, or a new salt that the next start with a database stores there (an install with no hashes yet)
+    return kv ?? mirror(randomUUID());
+  })();
+  const devClock = async () => new Date(Date.now() + (core ? await regulatorStore(core.pool).clockOffset() : 0) * 1000);
+  // Everything built on the core is built per core: a new database or storage setting makes a new core (and closes the old pool), so a
+  // service made at startup would keep the closed one. Each getter builds its service once for the current core.
+  const perCore = <T,>(make: (c: Core) => T) => {
+    const made = new WeakMap<Core, T>();
+    return (): T | null => {
+      if (core === null) return null;
+      if (!made.has(core)) made.set(core, make(core));
+      return made.get(core)!;
+    };
+  };
+  // Leads and orders (phase 4): signed webhooks and CSV imports; the simulated shop turns simulated clicks into leads.
+  const conversionsOf = perCore((c) => createConversions({ core: c, salt: emailSalt, secretKey: cfg.secretKey || undefined, now: devClock }));
+  // E-mail: providers with credentials, events in, statistics out (core/email).
+  const emailOf = perCore((c) => createEmail({
+    pool: c.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
+    sim: cfg.simEnabled ? { now: devClock, onSent: async (s) => { await conversionsOf()?.simShop(s); } } : undefined,
+  }));
+  // Learnings (docs/analytics.md): verdicts and patterns as structured rows, the brief agents read before writing. On the development clock.
+  const learningsOf = perCore((c) => { const e = emailOf(); return createLearnings({ core: c, now: devClock, measure: e ? emailMeasure(e) : undefined }); });
+  const learningsCli = createLearningsCli({ core: need, learnings: learningsOf });
+  // Costs and the brand's economics: the generation ledger, review minutes, e-mail sends, the profile a person sets.
+  // One clock for every report: the development clock (real time plus the offset `sim advance` sets, 0 in production).
+  const economicsOf = perCore((c) => createEconomics({
+    core: c, now: devClock, conversions: conversionsOf() ?? undefined,
+    unitPrice: async (provider, campaignId) => { const r = await c.settings.resolve(campaignId, `${provider}.unitPrice`).catch(() => null); return typeof r?.value === "number" ? r.value : null; },
+  }));
+  const economics = () => { const e = economicsOf(); if (!e) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return e; };
+  const conv = () => { const x = conversionsOf(); if (!x) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return x; };
+  // Paid media (phase 5). Real platforms and ACP payments are adapters still to write; the mock pair comes with the simulated provider.
+  const mediaOf = perCore((c) => {
+    const num = async (campaignId: string, key: string) => { const r = await c.settings.resolve(campaignId, key).catch(() => null); return typeof r?.value === "number" && r.value > 0 ? r.value : null; };
+    const econ = economicsOf()!;
+    return createMedia({
+      core: c, economics: econ, conversions: conversionsOf() ?? undefined,
+      buyers: cfg.simEnabled ? [mockBuyer({ now: devClock })] : [], payments: cfg.simEnabled ? [mockPayments()] : [],
+      limits: async (campaignId) => ({ maxPerOrder: await num(campaignId, "ads.maxPerOrder"), dailyLimit: await num(campaignId, "ads.dailyLimit"), monthlyLimit: await num(campaignId, "ads.monthlyLimit"), currency: (await econ.profile.get(campaignId))?.profile.currency ?? null }),
+      now: devClock,
+    });
   });
+  const ads = () => { const m = mediaOf(); if (!m) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return m; };
+  const resultsCli = createResultsCli({ core: need, economics, conversions: conversionsOf });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library() }) : null;
-  const editorCli = createEditorCli({ core: need, regulator: () => regulator });
+  const regulatorOf = perCore((c) => { const e = emailOf(); return e ? createRegulator({ core: c, email: e, library: () => emailTemplates.library(), learnings: learningsOf() ?? undefined, conversions: conversionsOf() ?? undefined }) : null; });
+  const editorCli = createEditorCli({
+    core: need, regulator: regulatorOf,
+    autorun: {
+      enabled: async (campaignId) => (await need().settings.resolve(campaignId, "editor.autoRun"))?.value === true,
+      spawn: async (prompt, campaignId) => { const id = await spawnAgentThread(bb, prompt); await assignThread(id, campaignId); return id; },
+      lastRun: async (key) => (await bb.storage.kv.get<number>(key)) ?? null,
+      setLastRun: async (key, at) => { await bb.storage.kv.set(key, at); },
+    },
+  });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
-  const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
-  for (const p of email?.providers ?? []) {
+  const allConnectors = () => { const email = emailOf(), media = mediaOf(); return [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : []), ...(media ? [media.connector()] : [])]; };
+  // routes for the providers configured at start (credentials are plugin settings); each call goes to the current e-mail service
+  for (const p of emailOf()?.providers ?? []) {
     if (!p.events) continue;
     // the provider signs each call, so the route needs no bb login (a signature failure stores nothing)
     bb.http.route("POST", `/webhooks/email/${p.id}`, async (ctx) => {
       const headers: Record<string, string> = {};
       ctx.req.raw.headers.forEach((value, key) => { headers[key] = value; });
       try {
-        const r = await email!.webhook(p.id, { headers, body: await ctx.req.text() });
+        const r = await emailOf()!.webhook(p.id, { headers, body: await ctx.req.text() });
         return new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
       } catch (cause) {
         return new Response(JSON.stringify({ error: cause instanceof Error ? cause.message : String(cause) }), { status: 400, headers: { "content-type": "application/json" } });
       }
     }, { auth: "none" });
   }
+
+  // Conversion sources sign their calls (generic format, docs/analytics.md phase 4), so the route needs no bb login; ?source=<id>.
+  bb.http.route("POST", "/webhooks/conversions", async (ctx) => {
+    const json = (status: number, v: unknown) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    const conversions = conversionsOf();
+    if (!conversions) return json(503, { error: "not configured" });
+    const source = new URL(ctx.req.raw.url).searchParams.get("source") ?? "";
+    const headers: Record<string, string> = {};
+    ctx.req.raw.headers.forEach((value, key) => { headers[key] = value; });
+    try {
+      const r = await conversions.webhook(source, { headers, body: await ctx.req.text() });
+      return r.ok ? json(200, r.result) : json(r.status, { error: r.status === 401 ? "bad signature" : "unknown source" });
+    } catch (cause) {
+      return json(400, { error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, { auth: "none" });
 
   const changed = async () => {
     const entries = await need().calendar.list();
@@ -327,8 +452,12 @@ export default async function plugin(bb: BbPluginApi) {
   // shortcut: the default data dir of this instance; read it from bb when the SDK offers it
   const PROFILES_DIR = px.join(osx.homedir(), ".bb-brandwise", "providers");
   const host = () => ({ profilesDir: PROFILES_DIR, bins: { higgsfield: cfg.higgsfieldBin } });
+  // Spend lives in the cost ledger (Postgres, docs/analytics.md phase 3). The bb KV counter of earlier versions is still read for the
+  // day it was written, so a budget is not reset by an upgrade; nothing writes it any more.
   const spendKey = (provider: string, scope: Scope) => `gen_spend:${today()}:${provider}:${scope ?? "global"}`;
-  const spentAt = async (provider: string, scope: Scope) => (await bb.storage.kv.get<number>(spendKey(provider, scope))) ?? 0;
+  const spentAt = async (provider: string, scope: Scope) => (await economics().spentToday(provider, scope)) + ((await bb.storage.kv.get<number>(spendKey(provider, scope))) ?? 0);
+  /** Image or video, as far as the spec tells before the result exists (the result's own kind replaces it). */
+  const kindOfSpec = (spec: GenSpec) => (spec.startImage || spec.endImage || spec.videoRefs?.length || spec.audioRefs?.length || spec.params?.duration || /video|veo|kling|seedance|sora|wan|hailuo/i.test(spec.model) ? "video" : "image");
   const scopeName = async (c: Core, scope: Scope) => (scope === null ? "global" : ((await c.campaigns.list()).find((x) => x.id === scope)?.name ?? scope));
 
   async function costOf(c: Core, spec: GenSpec, scope: Scope, maxArg?: number) {
@@ -352,7 +481,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const { provider, config } = await c.generation.providerFor(campaign.id, host());
     const job = await provider.start(config, a.spec);
-    for (const scope of await c.settings.chain(campaign.id)) await bb.storage.kv.set(spendKey(provider.id, scope), (await spentAt(provider.id, scope)) + k.credits);
+    await economics().recordGeneration({ campaignId: campaign.id, provider: provider.id, jobId: job.id, units: k.credits, unit: provider.unit, format: `${kindOfSpec(a.spec)}/${a.spec.model}`, createdBy: "generate" });
     await bb.storage.kv.set(`gen_job:${job.id}`, { campaignId: campaign.id, provider: provider.id, role: a.role, name: a.name, spec: a.spec, credits: k.credits, startedAt: new Date().toISOString() });
     return { jobId: job.id, credits: k.credits, provider: provider.id, unit: provider.unit };
   }
@@ -365,7 +494,10 @@ export default async function plugin(bb: BbPluginApi) {
     const deadline = Date.now() + waitSeconds * 1000;
     for (;;) {
       const job = await provider.get(config, jobId);
-      if (isFailed(job.status)) throw new Error(`Generation ${jobId} ended as "${job.status}". ${provider.unit[0].toUpperCase()}${provider.unit.slice(1)} may still have been used.`);
+      if (isFailed(job.status)) {
+        await economics().finishGeneration(provider.id, jobId, { status: "failed" });
+        throw new Error(`Generation ${jobId} ended as "${job.status}". ${provider.unit[0].toUpperCase()}${provider.unit.slice(1)} may still have been used.`);
+      }
       if (job.status === "completed" && job.resultUrl) {
         const ext = /\.(png|jpe?g|webp|gif|mp4|webm)(?:$|\?)/i.exec(new URL(job.resultUrl).pathname + "?")?.[1]?.toLowerCase() ?? "png";
         const asset = await c.assets.save({
@@ -374,6 +506,7 @@ export default async function plugin(bb: BbPluginApi) {
           provenance: { tool: provider.id, model: meta.spec.model, jobId, prompt: meta.spec.prompt, aspect: meta.spec.aspect ?? null, resolution: meta.spec.resolution ?? null, refs: (meta.spec.refs ?? []).map((r) => r.split("/").pop()), creditsEstimated: meta.credits },
         });
         await bb.storage.kv.set(`gen_job:${jobId}`, { ...meta, assetId: asset.id });
+        await economics().finishGeneration(provider.id, jobId, { status: "done", assetId: asset.id, format: `${asset.kind}/${meta.spec.model}` });
         bb.realtime.publish(ASSETS_CHANGED, {});
         return { state: "done" as const, jobId, status: job.status, credits: meta.credits, asset };
       }
@@ -432,7 +565,7 @@ export default async function plugin(bb: BbPluginApi) {
     bb, need, enginePath: () => cfg.videoEnginePath, assetsChanged: () => bb.realtime.publish(ASSETS_CHANGED, {}),
   });
 
-  const emailTemplates = createEmailTemplates({ need, email: () => email, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath, publicAssets: () => (cfg.publicAssetBucket && cfg.publicAssetBaseUrl ? { bucket: cfg.publicAssetBucket, baseUrl: cfg.publicAssetBaseUrl } : null) });
+  const emailTemplates = createEmailTemplates({ need, email: emailOf, enginePath: () => cfg.emailEnginePath, chromePath: () => cfg.chromePath, videoEnginePath: () => cfg.videoEnginePath, publicAssets: () => (cfg.publicAssetBucket && cfg.publicAssetBaseUrl ? { bucket: cfg.publicAssetBucket, baseUrl: cfg.publicAssetBaseUrl } : null) });
   const agents = createAgents({ bb, need, video: video.agentContext, email: emailTemplates.agentContext, assignThread });
 
   // Display mode: applied once per change of the setting, on `mode set` / the Settings switch, and on `mode apply`.
@@ -536,25 +669,69 @@ export default async function plugin(bb: BbPluginApi) {
       await changed();
       return entry;
     },
-    calendar_decide: async ({ id, decision }) => {
-      const entry = await need().calendar.decide(id, decision);
+    calendar_decide: async ({ id, decision, reviewSeconds }) => {
+      const entry = await need().calendar.decide(id, decision, "ui", reviewSeconds ?? null);
       await changed();
       return entry;
     },
     calendar_update: async ({ id, ...patch }) => {
-      const entry = await need().calendar.update(id, patch);
+      const entry = await need().calendar.update(id, patch, "ui");
       await changed();
       return entry;
     },
     calendar_unapprove: async ({ id }) => {
-      const entry = await need().calendar.unapprove(id);
+      const entry = await need().calendar.unapprove(id, "ui");
       await changed();
       return entry;
     },
-    calendar_request_changes: async ({ id, note }) => {
-      const entry = await need().calendar.requestChanges(id, note);
+    calendar_request_changes: async ({ id, note, reason, reviewSeconds }) => {
+      const entry = await need().calendar.requestChanges(id, note, { actor: "ui", reason: reason ?? null, reviewSeconds: reviewSeconds ?? null });
       await changed();
       return entry;
+    },
+    entry_learnings: async ({ id }) => {
+      const learnings = learningsOf();
+      if (!learnings) throw new Error("Not configured");
+      const info = await learnings.forEntry(id);
+      const entry = await need().calendar.get(id);
+      const regulator = regulatorOf();
+      const e = entry?.experimentId && regulator ? await regulator.store.experiment(entry.experimentId) : null;
+      const media = mediaOf();
+      const mo = entry?.channel === "ads" && media ? await media.order(id) : null;
+      return {
+        ...info,
+        media: mo ? { action: mo.action, budget: mo.budget, currency: mo.currency, days: mo.days, status: mo.status, platform: mo.platform, payment: mo.prepaid ? "prepaid account" : mo.payment, boostOf: mo.boostOf } : null,
+        experiment: e ? { id: e.id, hypothesis: e.hypothesis, lever: e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : null, variant: entry!.variant, round: (e.rounds.find((r) => r.armA === id || r.armB === id)?.round) ?? 1, plannedRounds: e.plannedRounds, expectedLift: e.expectedLift, mde: e.mde, status: e.status, verdict: e.verdict } : null,
+      };
+    },
+    learnings_list: async ({ campaignId }) => {
+      const learnings = learningsOf();
+      if (!learnings) throw new Error("Not configured");
+      return { learnings: (await learnings.list(campaignId)).map((l) => ({ id: l.id, scope: l.scope, kind: l.kind, evidence: l.evidence, result: l.result, statement: l.statement, channel: l.channel, status: l.status, effectiveStatus: l.effectiveStatus, contrary: l.contrary, createdBy: l.createdBy, confirmedBy: l.confirmedBy, decidedAt: l.decidedAt, sourceIds: l.sourceIds })) };
+    },
+    results_costs: async ({ campaignId, sinceDays }) => {
+      const e = economics();
+      return { report: { costs: await e.costs(campaignId, { sinceDays }), formats: await e.formats(campaignId, { sinceDays: Math.max(sinceDays, 90) }), production: await e.production(campaignId, { sinceDays: Math.max(sinceDays, 90) }) } };
+    },
+    economics_get: async ({ campaignId }) => ({ economics: await economics().economics(campaignId) }),
+    results_funnel: async ({ campaignId, sinceDays }) => ({ funnel: await economics().funnel(campaignId, { sinceDays }) }),
+    ads_results: async ({ campaignId }) => ({ ads: await ads().results(campaignId) }),
+    ads_target: async ({ campaignId }) => ({ target: await need().channels.get(campaignId, "ads"), ...ads().options() }),
+    ads_target_set: async ({ campaignId, target }) => { await ads().setTarget(campaignId, target); return { ok: true }; },
+    conversion_sources: async ({ campaignId }) => ({ sources: (await conv().sources.list(campaignId)).map((s) => ({ id: s.id, name: s.name, adapter: s.adapter, received: s.received, createdAt: s.createdAt })) }),
+    conversion_source_add: async ({ campaignId, name, adapter }) => {
+      const r = await conv().sources.create({ campaignId, name, adapter, createdBy: "ui" });
+      return { id: r.source.id, secret: r.secret, path: `/api/v1/plugins/brandwise/http/webhooks/conversions?source=${r.source.id}` };
+    },
+    conversion_import: async ({ sourceId, csv, mapping, kind }) => ({ result: await conv().importCsv(sourceId, csv, mapping, { kind }) }),
+    promo_set: async ({ code, campaignId }) => { await conv().promo(code, campaignId); return { ok: true }; },
+    economics_set: async ({ campaignId, profile }) => { await economics().profile.set(campaignId, profile, "ui"); return { ok: true }; },
+    cost_add: async ({ campaignId, kind, amount, ref, note, entryId }) => { await economics().addCost({ campaignId, kind, amount, ref, note, entryId: entryId ?? null, createdBy: "ui" }); return { ok: true }; },
+    learning_set_status: async ({ id, action }) => {
+      const learnings = learningsOf();
+      if (!learnings) throw new Error("Not configured");
+      if (action === "confirm") await learnings.confirm(id, "ui"); else await learnings.retire(id, "ui");
+      return { ok: true };
     },
     thread_campaigns: async ({ threadIds }) => ({ map: await threadCampaigns(threadIds) }),
     thread_set_campaign: async ({ threadId, campaignId }) => {
@@ -720,21 +897,53 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  /**
+   * Who did it, as recorded in the entry's history: always "cli" or "cli:<label>" from the CLI. `--as` is a label agents give
+   * themselves, not an identity, so it can never claim a reserved actor ("ui" is a person on a page, "auto" and "scheduler" are code).
+   */
+  const RESERVED_ACTORS = new Set(["ui", "auto", "scheduler", "regulator", "miner", "promotion"]);
+  const cliActor = (args: string[]) => {
+    const label = val(args, "--as")?.trim();
+    if (!label) return "cli";
+    if (RESERVED_ACTORS.has(label.toLowerCase())) throw new Error(`--as ${label} is reserved: it names a person on a page or the system`);
+    return `cli:${label.slice(0, 40)}`;
+  };
+  /** `--brief-id`, `--applies`, `--tests`, `--tag` of calendar add/edit: what the entry was written from (learnings). */
+  async function attachFromArgs(entryId: string, args: string[]) {
+    const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
+    const input = { briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") };
+    const learnings = learningsOf();
+    if (!learnings || Object.values(input).every((v) => v === undefined)) return null;
+    return learnings.attach(entryId, { ...input, tagSource: "agent" });
+  }
+
   const usage = [
     "Usage:",
     "  bb brandwise campaign channel set <channel> <key>=<value>... | unset <channel> | list [--campaign <c>]   (where the campaign publishes, e.g. telegram chatId=@mychannel; a parent campaign's target applies when the campaign has none)",
     "  bb brandwise campaign list|add <name> --kind <always_on|campaign> [--parent <campaign>] [--from <date>] [--to <date>]",
     "  bb brandwise campaign assign <thread-id> <campaign> | campaign unassign <thread-id>   (link a bb thread to a campaign)",
     "  bb brandwise calendar list [--campaign <c>]",
-    "  bb brandwise calendar add <title> --channel <c> --at <ISO date> --tier <1|2|3> [--campaign <c>] [--asset <id>] [--body <text>] [--link <url>]",
-    "  bb brandwise calendar edit <id> [--title <t>] [--body <text>] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <id>]",
-    "  bb brandwise calendar request-changes <id> <note>",
+    "  bb brandwise calendar add <title> --channel <c> --at <ISO date> --tier <1|2|3> [--campaign <c>] [--asset <id>] [--body <text>] [--link <url>] [--brief-id <id> --applies <ids> --tests <id> --tag key=value,...]   (cite the brief you wrote from and the learnings you apply)",
+    "  bb brandwise calendar edit <id> [--title <t>] [--body <text>] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <id>] [--brief-id ... --applies ... --tests ... --tag ...]",
+    "  bb brandwise calendar request-changes <id> <note> [--reason claims|facts|tone|brand|visual|legal|typo|offer|other]",
+    "  bb brandwise calendar history <id>   (every action on the entry: who, when, the send-back notes)",
+    "  bb brandwise brief --campaign <c> [--channel <ch>] [--at <ISO>]   (read before writing: learnings in force, what not to re-test, candidates, the reviewer's rules, explore or exploit slot)",
+    "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
+    "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
+    "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
+    "  bb brandwise ads order --name \"...\" --budget <n> --days <n> --at <ISO> [--body \"<ad text>\"] [--link <url>] [--asset <id>] [--boost <published entry>] [--order <live order entry> (budget change)] [--currency EUR] [--campaign <c>]   (a tier-3 entry a person approves; refused at once over the ads limits, checked again before payment)",
+    "  bb brandwise ads list [--campaign <c>] | pause <entry> | pull   (per ad: spend, CTR, CPC, frequency, fatigue, CPL and ROAS on our leads; pull is run hourly by a bb automation)",
+    "  bb brandwise results funnel [--campaign <c>] [--since 30d]   (leads, qualified, won, orders and revenue as attribution ranges; CPL, CPQL, CAC and MER next to the profile's ceilings)",
+    "  bb brandwise results sources [--campaign <c>]   (the brand's lead sources and how much each received; adding one and importing are a person's, on the Results page)",
+    "  bb brandwise results costs|formats|production|economics [--campaign <c>] [--since 30d]   (read-only: what the campaign cost at the brand's prices, cost per approved asset per format, first-pass approval and send-back reasons, the profile's ceilings; setting the profile and stating costs is a person's, on the Results page)",
+    "  bb brandwise learnings mine [--campaign <c>]   (E2 patterns over matured entries; run weekly by a bb automation, silent when nothing is new)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
-    "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on e-mail; the rails judge, nobody can overrule)",
+    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" --expected-lift <0.3> [--rounds n] [--metric click_rate|lead_rate] | add-round <id> --a <entry> --b <entry> | evaluate <id> | backfill   (A/B on e-mail, registered before the first send; the rails judge, nobody can overrule; an untestable lift or a lever with a standing null result is refused)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
-    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] | complete <id> [--result '<json>']",
+    "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] [--brief-id <id>] [--applies <ids>] [--tests <id>] | complete <id> [--result '<json>']",
+    "  bb brandwise editor autorun   (run by a bb automation: starts the editor or the author only on campaigns with editor.autoRun and only when they have work; silent otherwise)",
     "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
     "  bb brandwise sim status | advance <90m|24h|2d> | reset   (development clock for the simulated provider)",
     "  bb brandwise email brand [set --brand '<json>' | --file <f>] | component [set <name> --file <full path of an .mjml file> or --mjml '<inline mjml>' | remove <name>]   (the client's brand kit and MJML components, inherited by child campaigns; add --campaign <c>)",
@@ -769,7 +978,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since", "--metric", "--budget", "--days", "--boost", "--order", "--currency"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -1002,6 +1211,8 @@ export default async function plugin(bb: BbPluginApi) {
             return reply(own, own.map((o) => `${o.channel}  ${JSON.stringify(o.config)}`).join("\n") || `${target.name}: no channel targets of its own (a parent campaign's apply).`);
           }
           if (!channel || (sub !== "set" && sub !== "unset")) return { exitCode: 1, stderr: usage };
+          // where money is spent and how it is paid is a person's choice, made on the Results page (Paid), never on the command line
+          if (channel === "ads") return { exitCode: 1, stderr: "The ads platform and payment method are set by a person on the Results page (Paid), not on the command line" };
           if (sub === "unset") return reply({ removed: await c.channels.unset(target.id, channel) }, `${target.name}: ${channel} target removed`);
           const config = Object.fromEntries(pairs.map((p) => { const i = p.indexOf("="); return i > 0 ? [p.slice(0, i), p.slice(i + 1)] : [p, ""]; }));
           if (Object.keys(config).length === 0 || Object.values(config).some((x) => x === "")) return { exitCode: 1, stderr: usage };
@@ -1033,6 +1244,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "email" && (action === "template" || action === "brand" || action === "component" || action === "entry")) return emailTemplates.cli(args, { val, positional, reply, usage });
         if (area === "email" && action === "stats") {
+          const email = emailOf();
           if (email === null) return { exitCode: 1, stderr: "Not configured: run infra/bb-instance/provision.sh apply" };
           const entryId = positional(args.slice(2))[0];
           const stats = await email.stats(entryId ? { entryId } : { campaignId: (await c.campaigns.resolve(val(args, "--campaign"))).id });
@@ -1042,6 +1254,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "email" && action === "ingest") { // replay a saved webhook payload (trusted file, no signature check)
           const provider = val(args, "--provider"), file = val(args, "--file");
+          const email = emailOf();
           if (!email || !provider || !file) return { exitCode: 1, stderr: usage };
           const r = await email.replay(provider, fsx.readFileSync(file, "utf8"), `replay-${px.basename(file)}`);
           if (r.stored > 0) await changed();
@@ -1053,9 +1266,10 @@ export default async function plugin(bb: BbPluginApi) {
           const at = val(args, "--at");
           const tier = Number(val(args, "--tier"));
           if (!title || !channel || !at || ![1, 2, 3].includes(tier)) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: "cli" });
+          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: cliActor(args) });
+          const linked = await attachFromArgs(e.id, args);
           await changed();
-          return reply(e, `Added ${fmtEntry(e)}`);
+          return reply({ ...e, learnings: linked }, `Added ${fmtEntry(e)}${linked ? `\nwritten from brief ${linked.briefId ?? "none"}; applies ${linked.applies.join(", ") || "nothing"}; tests ${linked.tests.join(", ") || "nothing"}` : "\nNo --brief-id: run `bb brandwise brief` before writing and cite what you apply (the reviewer sees it)."}`);
         }
         if (area === "calendar" && action === "edit") {
           const id = positional(args.slice(2))[0];
@@ -1064,31 +1278,60 @@ export default async function plugin(bb: BbPluginApi) {
           const e = await c.calendar.update(id, {
             title: val(args, "--title"), body: val(args, "--body"), link: val(args, "--link"), channel: val(args, "--channel"),
             scheduledAt: at, assetId: val(args, "--asset"),
-          });
+          }, cliActor(args));
+          await attachFromArgs(e.id, args);
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "unapprove") {
           const id = positional(args.slice(2))[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.unapprove(id);
+          const e = await c.calendar.unapprove(id, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "request-changes") {
           const [id, ...note] = positional(args.slice(2));
           if (!id || note.length === 0) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.requestChanges(id, note.join(" "));
+          const e = await c.calendar.requestChanges(id, note.join(" "), { actor: cliActor(args), reason: val(args, "--reason") ?? null });
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && (action === "approve" || action === "cancel")) {
           const id = rest[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.decide(id, action);
+          const e = await c.calendar.decide(id, action, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }
+        if (area === "calendar" && action === "history") {
+          const id = rest[0];
+          if (!id) return { exitCode: 1, stderr: usage };
+          const h = await c.calendar.history(id);
+          return reply(h, h.map((x) => `${x.at.slice(0, 16)}  ${x.kind.padEnd(17)} ${x.actor.padEnd(10)} ${x.fromStatus ?? ""} -> ${x.toStatus ?? ""}${x.reason ? `  [${x.reason}]` : ""}${x.note ? `  ${x.note}` : ""}`).join("\n") || "No history.");
+        }
+        if (area === "brief") return learningsCli.brief(args, { val, positional, reply, usage });
+        if (area === "results") return resultsCli.results(action, args, { val, positional, reply, usage });
+        if (area === "ads") {
+          const m = ads();
+          if (action === "order") { // an agent may draft an order: it is a tier-3 calendar entry a person approves, refused at once over the limits
+            const [name, budget, days, at] = [val(args, "--name"), Number(val(args, "--budget")), Number(val(args, "--days")), val(args, "--at")];
+            if (!name || !at || !(budget > 0) || !(days > 0)) return { exitCode: 1, stderr: usage };
+            const boost = val(args, "--boost"), change = val(args, "--order");
+            const r = await m.create({ campaignId: await campaign(), name, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, assetId: val(args, "--asset") ?? null, action: change ? "budget_change" : boost ? "boost" : "media_buy", budget, currency: val(args, "--currency"), days, boostOf: boost ?? null, orderOf: change ?? null, at, createdBy: cliActor(args) });
+            await changed();
+            return reply(r, `Order ${r.entry.id}: ${r.order.action} ${r.order.budget} ${r.order.currency} over ${r.order.days} day(s), waiting for a person's approval (tier 3). The limits are checked again before anything is paid.`);
+          }
+          if (action === "pause") { if (!rest[0]) return { exitCode: 1, stderr: usage }; await m.pause(rest[0]); return reply({ ok: true }, `Ad ${rest[0]} paused.`); }
+          if (action === "pull") { const r = await m.pull(); return reply(r, r.points > 0 ? `${r.points} number(s) updated over ${r.orders} live order(s)` : ""); }
+          if (action === "list") {
+            const rows = await m.results(await campaign());
+            const f = (v: number | null, d = 2) => (v === null ? "n/a" : v.toFixed(d));
+            return reply(rows, rows.map((a) => `${a.entryId}  ${a.status.padEnd(7)} ${a.action.padEnd(9)} ${a.budget} ${a.currency}/${a.days}d  spend ${f(a.spend)}  CTR ${a.ctr === null ? "n/a" : (100 * a.ctr).toFixed(2) + " %"}  CPC ${f(a.cpc)}  freq ${f(a.frequency, 1)}  leads ${a.leads ?? "n/a"}  CPL ${f(a.cpl)}${a.fullyLoadedCpl !== null ? ` (fully loaded ${f(a.fullyLoadedCpl)})` : ""}  ROAS ${f(a.roas)}${a.fatigue ? "  FATIGUE" : ""}  "${a.name}"`).join("\n") || "No ads.");
+          }
+          return { exitCode: 1, stderr: usage };
+        }
+        if (area === "learnings") return learningsCli.learnings(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "add") {
           const file = positional(args.slice(2))[0];
           if (!file) return { exitCode: 1, stderr: usage };
@@ -1178,6 +1421,7 @@ export default async function plugin(bb: BbPluginApi) {
           if (!key) return { exitCode: 1, stderr: usage };
           const f = c.settings.fields.find((x) => x.key === key);
           if (!f) return { exitCode: 1, stderr: `Unknown setting ${key}. List them with: bb brandwise config list` };
+          if (f.userOnly) return { exitCode: 1, stderr: `${key} is changed by a person on the Settings page (or the campaign page), never from the command line` };
           if (action === "unset") {
             await c.settings.unset(scope, key);
             bb.realtime.publish(CONFIG_CHANGED, {});

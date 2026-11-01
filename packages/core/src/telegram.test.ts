@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { campaignSlug } from "./email/domain/render.ts";
 import { test } from "node:test";
 import { telegram } from "./connector-telegram.ts";
 import type { PublishInput } from "./publish.ts";
 
-const entry = (over: Record<string, unknown> = {}) => ({ id: "e1", title: "t", body: "Hello", link: "https://example.com", ...over }) as PublishInput["entry"];
+const entry = (over: Record<string, unknown> = {}) => ({ id: "e1", title: "t", body: "Hello", link: "https://example.com", campaignName: "Spring Sale", ...over }) as PublishInput["entry"];
 const reply = (result: unknown) => new Response(JSON.stringify({ ok: true, result }), { status: 200 });
 
 test("telegram sends text, a photo with caption, and reports API errors", async () => {
@@ -20,12 +21,12 @@ test("telegram sends text, a photo with caption, and reports API errors", async 
   const text = await t.publish({ idempotencyKey: "k", entry: entry(), asset: null, target });
   assert.deepEqual(text, { externalId: "-100:7", url: "https://t.me/mychannel/7" });
   assert.match(calls[0].url, /botTOKEN\/sendMessage$/);
-  assert.deepEqual(calls[0].body, { chat_id: "@mychannel", text: "Hello\n\nhttps://example.com" });
+  assert.deepEqual(calls[0].body, { chat_id: "@mychannel", text: `Hello\n\nhttps://example.com/?utm_source=telegram&utm_medium=messenger&utm_campaign=${campaignSlug(entry().campaignName)}&utm_content=${entry().id}` });
 
   const asset = { kind: "image", mime: "image/png", name: "a.png", bytes: 3, read: async () => new Uint8Array([1, 2, 3]), url: async () => "" };
   await t.publish({ idempotencyKey: "k", entry: entry(), asset, target });
   assert.match(calls[1].url, /sendPhoto$/);
-  assert.equal((calls[1].body as any).caption, "Hello\n\nhttps://example.com");
+  assert.match((calls[1].body as any).caption, /^Hello\n\nhttps:\/\/example\.com\/\?utm_source=telegram.*utm_content=/);
 
   await assert.rejects(t.publish({ idempotencyKey: "k", entry: entry({ body: "boom", link: null }), asset, target }), /chat not found/);
   await assert.rejects(t.publish({ idempotencyKey: "k", entry: entry({ body: "", link: null }), asset: null, target }), /no text/);

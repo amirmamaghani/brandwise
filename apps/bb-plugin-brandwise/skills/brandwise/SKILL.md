@@ -28,9 +28,10 @@ Wherever `--campaign <c>` is accepted, `<c>` is an id or a name. It may be left 
 | Command | Effect |
 | --- | --- |
 | `bb brandwise calendar list [--campaign <c>]` | Entries: id, time (UTC), channel, tier, status, campaign. |
-| `bb brandwise calendar add "<title>" --channel <c> --at <ISO date> --tier <1\|2\|3> [--campaign <c>] [--asset <asset-id>] [--body "<text>"] [--link <url>]` | Add an entry. `--body` is the text exactly as it will be published (caption, e-mail text), `--link` an http(s) URL. A reviewer approves what they can read, so always fill the body. Tier 1 is approved automatically, tiers 2 and 3 wait for a human. |
+| `bb brandwise calendar add "<title>" --channel <c> --at <ISO date> --tier <1\|2\|3> [--campaign <c>] [--asset <asset-id>] [--body "<text>"] [--link <url>] [--brief-id <id> --applies <ids> --tests <id> --tag <key=value,...>]` | Add an entry. `--body` is the text exactly as it will be published (caption, e-mail text), `--link` an http(s) URL. A reviewer approves what they can read, so always fill the body. Tier 1 is approved automatically, tiers 2 and 3 wait for a human. Cite the brief you wrote from and the learnings you apply (see "Before you write content"). |
 | `bb brandwise calendar edit <id> [--title <t>] [--body "<text>"] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <asset-id>]` | Change an entry. Changing title, text, link, channel or creative of an approved tier 2 or 3 entry sends it back for approval; moving the time does not. Published and cancelled entries cannot be edited. |
-| `bb brandwise calendar request-changes <id> "<note>"` | Send a pending entry back to its author with a note (what a human uses when they do not approve as is). |
+| `bb brandwise calendar request-changes <id> "<note>" [--reason claims\|facts\|tone\|brand\|visual\|legal\|typo\|offer\|other]` | Send a pending entry back to its author with a note (what a human uses when they do not approve as is). |
+| `bb brandwise calendar history <id>` | Every action on the entry: who did what and when, every send-back note. |
 | `bb brandwise calendar unapprove <id>` | Take an upcoming approved entry back to `pending_approval`. Approving it again is a manual step for a human, also for tier 1. |
 | `bb brandwise calendar approve <id>` | Approve a pending entry. Do this only when the user says so. |
 | `bb brandwise calendar cancel <id>` | Cancel an entry. |
@@ -40,6 +41,51 @@ An entry whose publish time has come (now counts) accepts no action at all: not 
 An entry with status `changes_requested` was sent back by a human: `calendar list` prints their note under it. Revise it with `calendar edit` (any edit resubmits it for approval) and do not argue with the note; if it cannot be done as asked, say why in your reply to the user.
 
 Times without an offset are read in the server's local time and shown in UTC.
+
+## Before you write content
+
+Run `bb brandwise brief --campaign <c> --channel <ch> [--at <ISO date of the entry>]` first. It prints, from code:
+
+- **Learnings in force** (E1 = an experiment verdict, E2 = a pattern over many entries), strongest first: apply them.
+- **Do not test again**: levers where no difference was found at this audience size.
+- **Candidates** (E3): ideas to try only in an explore slot or as an experiment, never as fact.
+- **Style rules** from the reviewer (confirmed by a person) and the latest send-back notes: keep them.
+- Whether this is an **exploit** slot (apply what is known) or an **explore** slot (try one untested idea).
+
+When you add the entry, pass `--brief-id <id> --applies <learning ids>` and, in an explore slot, `--tests <id>`; tag what you chose with `--tag hook=question,offer=free_trial` (keys: hook, angle, offer, visual_style, cta, subject_style, tone, template). The reviewer sees what you declared. Subject features, format, length and send time are tagged by code.
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise learnings list [--campaign <c>] [--status active\|needs_retest\|proposed] [--evidence E1\|E2\|E3]` | What the brand has learned, with evidence and status. |
+| `bb brandwise learnings add "<observation>" [--lever "attribute: from -> to"] [--campaign <c>]` | Note an observation as E3 (a candidate to test). E1 and E2 are written by code only. |
+| `bb brandwise learnings propose-preference "<rule>" --from-entries <ids>` | Propose a rule drawn from a person's send-backs of those entries; it is in force once the person confirms it. |
+
+## Paid media
+
+Buying ads, boosting a published post and changing a running budget are calendar entries on channel `ads`, always tier 3: a person approves every one, and the money moves only when its time comes.
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise ads order --name "<ad>" --budget <n> --days <n> --at <ISO> [--body "<ad text>"] [--link <url>] [--asset <id>] [--boost <published entry>] [--order <live order> (budget change)] [--campaign <c>]` | Draft an order. Refused at once when it breaks the brand's ads limits (per order, per day, per month); unset limits buy nothing. The limits are checked again right before payment. |
+| `bb brandwise ads list [--campaign <c>]` | Per ad: spend, CTR, CPC, frequency, fatigue, our leads, CPL (fully loaded when production is over 10 % of the spend), ROAS. Platform conversions are the platform's own count: indicative. |
+| `bb brandwise ads pause <entry>` | Stop a live ad (allowed to agents: it only stops spending). |
+
+You never see a payment method, a card or a token, you never set the limits (`config set ads.*` is refused) or where a campaign buys and how it pays (`campaign channel set ads` is refused; a person sets it on Results > Paid), and you cannot approve an ad (`calendar approve` refuses channel `ads`: a person approves it on the Calendar page). Prefer big creative differences over variations, and judge an ad by our leads and their quality, not by its clicks.
+
+## Results and costs (read-only)
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise results costs [--campaign <c>] [--since 30d]` | What a campaign cost, by kind (generation, media, review minutes, e-mail sends, LLM share, incentives, tools), at the brand's prices; what cannot be priced yet says what it needs. |
+| `bb brandwise results formats [--campaign <c>]` | Creative economics per format: everything generated (rejected and failed included) over the assets that made it into an approved entry. |
+| `bb brandwise results production [--campaign <c>]` | First-pass approval, send-backs per entry, time to approval, send-back reasons. |
+| `bb brandwise results economics [--campaign <c>]` | The economics profile and its ceilings (break-even ROAS, value per lead, CPL max), with what is missing. |
+| `bb brandwise results funnel [--campaign <c>] [--since 30d]` | Leads, qualified, won, orders and revenue as ranges (last click .. with promo codes and self-reports), CPL, CPQL, CAC and MER next to the ceilings. Decide on the range, never on one end of it. Without a lead source leads are unknown, not zero. |
+| `bb brandwise results sources [--campaign <c>]` | The brand's lead sources and how many leads each received. |
+
+A fully loaded cost per lead of a single organic creative is not a metric (too few leads per creative); compare formats and attributes over many entries. Setting the economics profile and stating costs (media spend, invoices) is a person's, on the Results page; generation spend is recorded by the system.
+
+A single send is not evidence: never cite the result of one entry as a reason. Confirming or retiring a learning (Results page only), goals, budgets and approvals are the user's.
 
 ## Assets
 
@@ -56,9 +102,9 @@ Approved entries are published automatically when their time comes (a bb automat
 
 ## E-mail campaigns
 
-Channel `email`. The entry's **title is the subject**, **body is the e-mail** (plain text becomes paragraphs; start it with `<` to write HTML; an unsubscribe link is always added), **link** gets UTM parameters. When the entry is approved and its time comes it is created as a campaign at the provider and sent to the campaign's audience: nobody can send without approval, and you never choose the audience. The audience and sender are the campaign's email target, set by a human (`bb brandwise campaign channel set email provider=resend segmentId=<id> from="Name <news@domain>"`); without it the entry waits as "Publish by hand". Claims in finance e-mail (returns, "risk-free", leverage) must be checked by the client: write nothing that is not in the client's claims, and use tier 3 for such e-mail.
+Channel `email`. The entry's **title is the subject**, **body is the e-mail** (plain text becomes paragraphs; start it with `<` to write HTML; an unsubscribe link is always added), **link** and every link in the body get UTM parameters (`utm_content` is the entry id, so a lead from the e-mail is traced to it; Telegram posts too). When the entry is approved and its time comes it is created as a campaign at the provider and sent to the campaign's audience: nobody can send without approval, and you never choose the audience. The audience and sender are the campaign's email target, set by a human (`bb brandwise campaign channel set email provider=resend segmentId=<id> from="Name <news@domain>"`); without it the entry waits as "Publish by hand". Claims in finance e-mail (returns, "risk-free", leverage) must be checked by the client: write nothing that is not in the client's claims, and use tier 3 for such e-mail.
 
-Results: `bb brandwise email stats <entry-id>` (or `--campaign <c>`): delivered, bounces, complaints, opens, clicks, click rate. Same numbers whichever provider sent it; a metric the provider cannot report shows "n/a", never 0. Opens are indicative only (privacy proxies inflate them): judge by clicks.
+Results: `bb brandwise email stats <entry-id>` (or `--campaign <c>`): delivered, bounces, complaints, opens, clicks, click rate. What the results taught is in `bb brandwise brief`, not in single sends. Same numbers whichever provider sent it; a metric the provider cannot report shows "n/a", never 0. Opens are indicative only (privacy proxies inflate them): judge by clicks.
 
 Always pass `--ai` for AI-generated images or video, and put model, prompt, job id and cost into `--provenance`. After creating a creative, show it in chat with `::creative{ids="<asset-id>[,<asset-id>...]"}` on its own line (outside any code fence): it renders the Creatives tile and opens the same preview dialog.
 

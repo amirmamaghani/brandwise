@@ -1,17 +1,17 @@
 // Signals: what the regulator agent gets to see instead of raw data. Pure: numbers in, a small structured report out.
 // Rates are smoothed over the last few MATURE sends (a filter against noise) and always come with sample size and an interval.
 import type { Counts } from "../email/domain/types.ts";
-import { brokenGuard, canPropose, isMature, judge, matureAt, type ArmData, type ProposalState, type Rails, type Verdict } from "./rails.ts";
-import { minDetectableLift, wilson } from "./stats.ts";
+import { brokenGuard, canPropose, isMature, judgeSeries, matureAt, unavailableGuards, type ArmData, type ProposalState, type Rails, type Verdict } from "./rails.ts";
+import { minDetectableLift, roundsNeeded, wilson } from "./stats.ts";
 
 export const GOAL_METRICS = ["click_rate", "complaint_rate", "unsubscribe_rate", "bounce_rate"] as const;
 export type GoalMetric = (typeof GOAL_METRICS)[number];
 export type Goal = { metric: GoalMetric; kind: "target" | "limit"; value: number };
 
-export type SendView = { entryId: string; title: string; campaignId: string; sentAt: string | null; counts: Counts };
-export type ExperimentView = { id: string; hypothesis: string; armA: string; armB: string; status: "running" | "concluded"; verdict: string | null; createdAt: string; concludedAt: string | null; reasons?: string[] };
+export type SendView = { entryId: string; title: string; campaignId: string; sentAt: string | null; counts: Counts; measured?: ArmData["measured"]; leads?: number };
+export type ExperimentView = { id: string; hypothesis: string; armA: string; armB: string; status: "running" | "concluded"; verdict: string | null; createdAt: string; concludedAt: string | null; reasons?: string[]; rounds?: { armA: string; armB: string }[]; plannedRounds?: number; metric?: string };
 
-export const armOf = (v: SendView): ArmData => ({ entryId: v.entryId, sentAt: v.sentAt, delivered: v.counts.delivered, clicks: v.counts.clicked.unique, complaints: v.counts.complained, unsubscribes: v.counts.unsubscribed });
+export const armOf = (v: SendView): ArmData => ({ entryId: v.entryId, sentAt: v.sentAt, delivered: v.counts.delivered, clicks: v.counts.clicked.unique, complaints: v.counts.complained, unsubscribes: v.counts.unsubscribed, measured: v.measured, leads: v.leads });
 
 const rateOf = (metric: GoalMetric, a: { delivered: number; clicks: number; complaints: number; unsubscribes: number; bounced: number; sent: number }) =>
   metric === "click_rate" ? a.clicks / a.delivered : metric === "complaint_rate" ? a.complaints / a.delivered : metric === "unsubscribe_rate" ? a.unsubscribes / a.delivered : a.bounced / a.sent;
@@ -23,8 +23,8 @@ export type Signals = {
   goals: { metric: GoalMetric; kind: "target" | "limit"; value: number; current: number | null; sample: number; gap: number | null; ok: boolean | null }[];
   recent: { entryId: string; title: string; sentAt: string | null; mature: boolean; maturesAt: string | null; delivered: number; clickRate: number | null; clickRateCi: [number, number] | null; complaintRate: number | null; unsubscribeRate: number | null; guard: string | null }[];
   experiments: { running: (ExperimentView & { verdict: string; reasons: string[]; readyAt: string | null })[]; recentlyConcluded: ExperimentView[] };
-  /** What the current audience size can show: effects smaller than `minDetectableLift` end inconclusive. */
-  power: { deliveredPerArm: number; clickRate: number; minDetectableLift: number } | null;
+  /** What the current audience size can show: effects smaller than `minDetectableLift` end inconclusive; a series of rounds shows more. */
+  power: { deliveredPerArm: number; clickRate: number; minDetectableLift: number; roundsFor: { lift: number; rounds: number | null }[]; /** when leads are measured */ leadRate: number | null; leadMinDetectableLift: number | null } | null;
   allowed: { proposeExperiment: { ok: boolean; reason: string | null } };
   notes: string[];
 };
@@ -42,35 +42,42 @@ export function buildSignals(input: {
   const pooled = window.reduce((t, s) => ({ delivered: t.delivered + s.counts.delivered, clicks: t.clicks + s.counts.clicked.unique, complaints: t.complaints + s.counts.complained, unsubscribes: t.unsubscribes + s.counts.unsubscribed, bounced: t.bounced + s.counts.bounced.hard + s.counts.bounced.soft + s.counts.bounced.unknown, sent: t.sent + s.counts.sent }), { delivered: 0, clicks: 0, complaints: 0, unsubscribes: 0, bounced: 0, sent: 0 });
 
   const running = experiments.filter((e) => e.status === "running").map((e) => {
-    const a = byEntry.get(e.armA), b = byEntry.get(e.armB);
     const empty: ArmData = { entryId: "", sentAt: null, delivered: 0, clicks: 0, complaints: 0, unsubscribes: 0 };
-    const j: Verdict = judge(a ? armOf(a) : { ...empty, entryId: e.armA }, b ? armOf(b) : { ...empty, entryId: e.armB }, asOf, rails);
+    const arm = (id: string) => { const v = byEntry.get(id); return v ? armOf(v) : { ...empty, entryId: id }; };
+    const rounds = (e.rounds ?? [{ armA: e.armA, armB: e.armB }]).map((r) => ({ a: arm(r.armA), b: arm(r.armB) }));
+    const j: Verdict = judgeSeries(rounds, e.plannedRounds ?? 1, asOf, rails, (e.metric ?? "click_rate") as "click_rate" | "lead_rate");
     return { ...e, verdict: j.verdict, reasons: j.reasons, readyAt: j.readyAt };
   });
   const incumbent = input.state.incumbentEntryId ? byEntry.get(input.state.incumbentEntryId) : undefined;
   const notes: string[] = [];
   if (matured.length === 0) notes.push("No send has matured yet: there is nothing to regulate on. Wait for the first send to age.");
   if (window.length > 0 && window.length < k) notes.push(`Only ${window.length} matured send(s) so far, the smoothed rate is rough.`);
+  for (const u of unavailableGuards(window.map(armOf))) notes.push(`${u[0].toUpperCase()}${u.slice(1)}: its rate is not 0 %, it is unknown.`);
 
   return {
     asOf: asOf.toISOString(),
     frozen: { frozen: input.state.frozen, reason: input.state.frozenReason },
     incumbent: input.state.incumbentEntryId ? { entryId: input.state.incumbentEntryId, title: incumbent?.title ?? "(not sent yet)" } : null,
     goals: goals.map((g) => {
-      const current = pooled.delivered > 0 && pooled.sent > 0 ? rateOf(g.metric, pooled) : null;
+      const unknown = (g.metric === "unsubscribe_rate" && window.some((w) => w.measured?.unsubscribes === false)) || (g.metric === "complaint_rate" && window.some((w) => w.measured?.complaints === false));
+      const current = pooled.delivered > 0 && pooled.sent > 0 && !unknown ? rateOf(g.metric, pooled) : null;
       return { ...g, current, sample: pooled.delivered, gap: current === null ? null : g.kind === "target" ? g.value - current : current - g.value, ok: current === null ? null : g.kind === "target" ? current >= g.value : current <= g.value };
     }),
     recent: sorted.slice(0, 8).map((s) => {
       const a = armOf(s);
       const ci = a.delivered > 0 ? wilson(a.clicks, a.delivered) : null;
-      return { entryId: s.entryId, title: s.title, sentAt: s.sentAt, mature: isMature(a, asOf, rails), maturesAt: matureAt(s.sentAt, rails), delivered: a.delivered, clickRate: a.delivered > 0 ? a.clicks / a.delivered : null, clickRateCi: ci ? [ci.low, ci.high] : null, complaintRate: a.delivered > 0 ? a.complaints / a.delivered : null, unsubscribeRate: a.delivered > 0 ? a.unsubscribes / a.delivered : null, guard: brokenGuard(a, rails) };
+      return { entryId: s.entryId, title: s.title, sentAt: s.sentAt, mature: isMature(a, asOf, rails), maturesAt: matureAt(s.sentAt, rails), delivered: a.delivered, clickRate: a.delivered > 0 ? a.clicks / a.delivered : null, clickRateCi: ci ? [ci.low, ci.high] : null, complaintRate: a.delivered > 0 && a.measured?.complaints !== false ? a.complaints / a.delivered : null, unsubscribeRate: a.delivered > 0 && a.measured?.unsubscribes !== false ? a.unsubscribes / a.delivered : null, guard: brokenGuard(a, rails) };
     }),
     experiments: { running, recentlyConcluded: experiments.filter((e) => e.status === "concluded").slice(0, 5) },
     power: (() => {
       const n = window.length ? Math.round(pooled.delivered / window.length) : 0;
       const rate = pooled.delivered > 0 ? pooled.clicks / pooled.delivered : 0;
       const mde = minDetectableLift(rate, n);
-      return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde };
+      // leads keep coming for days: only sends whose leads have matured count, or the rate reads low
+      const leadDone = window.filter((w) => w.leads !== undefined && w.sentAt !== null && Date.parse(w.sentAt) + rails.leadMatureAfterHours * 3_600_000 <= asOf.getTime());
+      const leadDelivered = leadDone.reduce((t, w) => t + w.counts.delivered, 0);
+      const leadRate = leadDone.length > 0 && leadDelivered > 0 ? leadDone.reduce((t, w) => t + (w.leads ?? 0), 0) / leadDelivered : null;
+      return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde, roundsFor: [0.2, 0.3, 0.5].map((lift) => ({ lift, rounds: roundsNeeded(rate, n, lift) })), leadRate, leadMinDetectableLift: leadRate ? minDetectableLift(leadRate, n) : null };
     })(),
     allowed: { proposeExperiment: canPropose({ ...input.state, running: running.length }, asOf, rails) },
     notes,

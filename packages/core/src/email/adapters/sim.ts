@@ -13,7 +13,8 @@ export const simCapabilities: Capabilities = {
 
 const MIN = 60_000, HOUR = 3_600_000;
 
-export function simProvider(cfg: { recipient: (address: string) => Recipient; now: () => Promise<Date> }): EmailProvider {
+export type SimSent = { externalId: string; subject: string; html: string; target: Record<string, string>; events: EmailEvent[] };
+export function simProvider(cfg: { recipient: (address: string) => Recipient; now: () => Promise<Date>; /** called after a send's events are stored (sim-shop turns clicks into leads) */ onSent?: (s: SimSent) => Promise<void> }): EmailProvider {
   const drafts = new Map<string, { subject: string; html: string; target: Record<string, string> }>();
   let sink: ((events: EmailEvent[]) => Promise<unknown>) | null = null;
   let n = 0;
@@ -65,8 +66,10 @@ export function simProvider(cfg: { recipient: (address: string) => Recipient; no
         const d = drafts.get(externalId);
         if (!d) throw new Error(`Unknown simulated campaign ${externalId} (drafts live in memory: a restart between create and send loses them)`);
         if (!sink) throw new Error("The simulated provider has no event sink attached");
-        await sink(world(externalId, d, (await cfg.now()).getTime()));
+        const events = world(externalId, d, (await cfg.now()).getTime());
+        await sink(events);
         drafts.delete(externalId);
+        await cfg.onSent?.({ externalId, ...d, events });
       },
       async status(externalId) { return drafts.has(externalId) ? "draft" : "sent"; },
     },

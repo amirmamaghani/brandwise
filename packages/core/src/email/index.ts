@@ -8,7 +8,7 @@ import { ingest } from "./domain/ingest.ts";
 import { commonCapabilities, computeMetrics } from "./domain/metrics.ts";
 import type { EmailProvider } from "./domain/ports.ts";
 import type { Recipient } from "./domain/types.ts";
-import { simProvider } from "./adapters/sim.ts";
+import { simProvider, type SimSent } from "./adapters/sim.ts";
 import { emailConnector } from "./connector.ts";
 import { pgEmailStore } from "./store.ts";
 
@@ -18,9 +18,9 @@ export const recipientHasher = (salt: string) => (address: string): Recipient =>
   return { hash: createHash("sha256").update(`${salt}:${a}`).digest("hex"), domain: a.split("@")[1] ?? "" };
 };
 
-export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omit<ProviderConfig, "recipient">; extraProviders?: EmailProvider[]; /** Switches the simulated provider on (development): `now` is the development clock. */ sim?: { now: () => Promise<Date> } }) {
+export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omit<ProviderConfig, "recipient">; extraProviders?: EmailProvider[]; /** Switches the simulated provider on (development): `now` is the development clock; `onSent` sees each simulated send (sim-shop). */ sim?: { now: () => Promise<Date>; onSent?: (s: SimSent) => Promise<void> } }) {
   const recipient = recipientHasher(deps.salt);
-  const providers = [...providersFrom({ ...deps.providers, recipient }), ...(deps.sim ? [simProvider({ recipient, now: deps.sim.now })] : []), ...(deps.extraProviders ?? [])];
+  const providers = [...providersFrom({ ...deps.providers, recipient }), ...(deps.sim ? [simProvider({ recipient, now: deps.sim.now, onSent: deps.sim.onSent })] : []), ...(deps.extraProviders ?? [])];
   const store = pgEmailStore(deps.pool);
   for (const p of providers) p.attachSink?.((events) => ingest(events, store));
   const provider = (id: string) => {

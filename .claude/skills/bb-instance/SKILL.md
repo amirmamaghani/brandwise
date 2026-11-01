@@ -31,6 +31,8 @@ infra/bb-instance/provision.sh down     # stop
 - `apply` also runs the core migrations and sets the plugin's Postgres/S3 settings from `.env`; the local stack must be up first (`pnpm infra:up`, see the `infra` skill).
 - `up` and `apply` write to `~/.bb-brandwise`, which the sandbox blocks: run them unsandboxed.
 - The instance does not start at boot (no launchd yet).
+- `bb` and `bb-app` come from PATH; when bb is installed only as the desktop app, the script runs the copies bundled in `/Applications/bb.app`.
+- A fresh instance has no project: `apply` creates "BrandWise" rooted at the data dir (automations and agent threads need one). The web UI then opens with bb's setup wizard (connect a coding agent); skipping it is fine for the BrandWise pages.
 
 ## Reaching the instance from other devices (tailnet)
 
@@ -91,5 +93,5 @@ Rules learned the hard way:
 - The calendar is the only way anything leaves the system: agents create entries, they never publish.
 - Tier 1 auto, tier 2 one click, tier 3 manual; unsure means the higher tier. Agents never approve unless the user says so.
 - Campaigns, calendar and asset records are in Postgres, files in S3 (`docs/assets.md`). Current shortcuts: no RLS, no CLI for `asset_link`.
-- Approved entries are fired by a bb automation, "BrandWise scheduler" (every minute, runs `bb brandwise calendar run-due`), created by `provision.sh apply`. Publishing goes through connectors (`packages/core/src/publish.ts`, `CONNECTORS`); a channel without one ends as `needs_manual`. Check it with `bb automation runs <id> --project <project id>`. Roadmap: `docs/roadmap.md`.
-- Scripts of bb automations get a wrong `BB_SERVER_URL` (default server) and a `BB_CLI` that points to the launcher in `<data dir>/bin/bb`, which re-execs itself without end (a fork storm of hundreds of processes per second). Any automation script that calls `bb` must set `BB_SERVER_URL=http://127.0.0.1:$BB_SERVER_PORT` and `BB_CLI=$BB_CLI_DIR/bb` first (see `SCHEDULER_SCRIPT` in provision.sh). Never export `BB_CLI` as the launcher in your own tests.
+- Approved entries are fired by a bb automation, "BrandWise scheduler" (every minute, runs `bb brandwise calendar run-due`), created by `provision.sh apply`. Two more automations come with it: "BrandWise editor" (every 6 h, `editor autorun`: starts the editor or the author only on campaigns with the setting `editor.autoRun` and only when code finds work), "BrandWise learnings" (Mondays, `learnings mine`: E2 patterns) and "BrandWise ads" (hourly, `ads pull`: platform reports and media spend); see `docs/analytics.md`. Publishing goes through connectors (`packages/core/src/publish.ts`, `CONNECTORS`); a channel without one ends as `needs_manual`. Check it with `bb automation runs <id> --project <project id>`. Roadmap: `docs/roadmap.md`.
+- Scripts of bb automations get a wrong `BB_SERVER_URL` (default server) and a `BB_CLI` that points to the launcher in `<data dir>/bin/bb`, which re-execs itself without end (a fork storm of hundreds of processes per second). Any automation script that calls `bb` must set `BB_SERVER_URL=http://127.0.0.1:$BB_SERVER_PORT` and `BB_CLI=$BB_CLI_DIR/bb` first (see `automation_script` in provision.sh). Never export `BB_CLI` as the launcher in your own tests.

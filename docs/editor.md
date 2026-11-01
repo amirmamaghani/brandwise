@@ -26,11 +26,15 @@ Code, not prompt: an agent can ask, it cannot overrule. Each rule answers a know
 | **Significance and minimum lift (hysteresis)**: p < 0.05 and at least 10 % relative difference | the incumbent changes only for a clear, sizeable win |
 | **Cooldown**: 24 h after an adoption | let a change settle, one change at a time |
 | **One running experiment** per campaign | one variable at a time, so a result has one cause |
-| **Guards**: complaint rate 0.3 %, unsubscribe rate 1 % | limits, not goals (Goodhart): a clickbait winner is rejected; two unsafe arms **freeze** the campaign until a person clears it |
+| **Guards**: complaints at the 0.3 % ceiling (two events at least) or clearly above 0.1 % (the lower end of their 95 % interval), unsubscribes over 1 %, or a challenger with significantly more complaints or unsubscribes than the control (one-sided p < 0.01, three events at least) | limits, not goals (Goodhart): a clickbait winner is rejected; two unsafe arms **freeze** the campaign until a person clears it. A guard the provider cannot measure is "unavailable", never 0 % |
+| **Registration and power**: the expected lift and the rounds are fixed before the first send; a lift the planned sample cannot show, or one under the 10 % hysteresis, is refused with the rounds it would need | an experiment that cannot conclude only spends sends |
+| **Series**: one hypothesis over several pairs of sends, pooled with Cochran-Mantel-Haenszel; fixed horizon, no verdict before the last round, but a broken guard stops it at once | small lists: a single send shows only very large effects |
 | **Separate audiences**: the arms are entries in two different child campaigns | otherwise the same people get both variants |
 | **Final verdicts**: a concluded experiment cannot be re-judged | the agent cannot shop for a better answer |
 
-The statistics (`stats.ts`) are two-sided two-proportion z-test and Wilson intervals. Guards use the point estimate on purpose: a false alarm costs less than a breach.
+The statistics (`stats.ts`) are the two-sided two-proportion z-test for one round, Cochran-Mantel-Haenszel for a series, Wilson intervals, and the power formula `n = 7.85 [p1(1 - p1) + p2(1 - p2)] / (p2 - p1)^2`. The ceiling guards use the point estimate on purpose (a false alarm costs less than a breach); the 0.1 % target and "worse than the control" need evidence, because guards are looked at after every round of a series. In 20 simulated series of 4 x 600 per arm with a true +51 %, the pooled verdict was B in 16, single rounds were significant in about a fifth, and one series was stopped by a false alarm.
+
+A series sends every round to the same two arm audiences, so a person counts in every round; pooling treats rounds as independent and overstates certainty somewhat. Re-randomizing per round needs the provider's contacts (later, `analytics.md`).
 
 ## Roles and commands
 
@@ -40,12 +44,16 @@ The statistics (`stats.ts`) are two-sided two-proportion z-test and Wilson inter
 
 ```
 bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]
-bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis "..." | evaluate <id>
+bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis "..." --lever "attribute: from -> to" --expected-lift 0.3 [--rounds n] | add-round <id> --a <entry> --b <entry> | evaluate <id> | backfill
 bb brandwise editor journal read [--limit n] [--kind learning] | write "<text>"
 bb brandwise editor tasks list | create --kind <k> --brief "..." [--params '<json>'] | claim <id> | complete <id> [--result '<json>']
 bb brandwise editor goals [set ...] | unfreeze
 bb brandwise sim status | advance <90m|24h|2d> | reset
+bb brandwise brief --campaign <c> --channel email          (what is known, what not to re-test, the reviewer's rules)
+bb brandwise editor autorun                                (the automation: starts the editor or author only when code finds work)
 ```
+
+Every verdict becomes a structured **learning** (E1) keyed on the experiment's lever; an inconclusive one becomes a null result that blocks a re-test of the same lever at the same audience size until it ages out. Authors and page agents read the same learnings through `brief`. Details: [`analytics.md`](analytics.md), phase 1.
 
 The commands take the always-on base campaign (a child resolves to its base). The identity given with `--as` is a label for the journal, **not** an authorisation: whether a caller is really the editor is not enforced yet, only the skills say who may do what.
 
@@ -81,5 +89,5 @@ A cycle is: an editor run, an author run if there are open tasks, one scheduler 
 
 - Verified caller identity (editor, author, person), and an approver agent with a policy and a veto window.
 - Other channels, budgets for paid promotion. (Other levers than the subject exist for e-mail: an experiment can vary one slot of a published template, see `docs/email-templates.md`.)
-- Per-campaign rails (they are defaults in code), and a UI page for goals, experiments and the journal.
-- Multi-armed experiments (only A/B), and sequential testing.
+- Per-campaign rails (they are defaults in code), and a UI page for goals, experiments and the journal (learnings have one: Results > Learnings).
+- Multi-armed experiments (only A/B), and sequential testing (a series has a fixed horizon).

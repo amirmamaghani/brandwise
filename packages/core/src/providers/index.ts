@@ -62,6 +62,7 @@ export const providerById = (id: string): Provider => {
 /** Limits every provider has. Counted in the provider's unit. */
 const budgetFields = (p: Provider): ProviderField[] => [
   { key: "maxPerGeneration", label: `Max ${p.unit} per generation`, description: "Hard ceiling for one image or video. Callers (CLI, MCP) can only ask for less.", type: "number", default: 5 },
+  { key: "unitPrice", label: `Price per ${p.unit.replace(/s$/, "")}`, description: "Money per unit in the brand's currency, for cost reports (cost per approved asset, campaign costs). Empty until known: reports then say what they need.", type: "number" },
   { key: "dailyBudget", label: `Daily budget (${p.unit})`, description: "Generation is refused for the rest of the day once everything under this scope has spent this much. A campaign's budget counts its own spend, the global one counts all.", type: "number", default: 40 },
 ];
 
@@ -74,6 +75,13 @@ export const SETTING_FIELDS: SettingField[] = [
     key: "download.cookiesBrowser", label: "Browser session", group: "Downloads", type: "select",
     options: ["none", "chrome", "safari", "firefox", "brave", "edge"], default: "none",
     description: "Instagram shows photos and many posts to signed-in sessions only. Pick the browser you are signed in to Instagram in and downloads use its session (macOS may ask for Keychain access). None = anonymous downloads. Only the user sets this, agents never choose a session.",
+  },
+  { key: "ads.maxPerOrder", label: "Max per order", group: "Paid media", type: "number", userOnly: true, description: "The largest budget one ad buy, boost or budget change may have, in the brand's currency. Unset: nothing is bought. Only the user sets this." },
+  { key: "ads.dailyLimit", label: "Daily limit", group: "Paid media", type: "number", userOnly: true, description: "What all running orders of the brand may commit per day together (each order's budget spread over its days). Unset: nothing is bought." },
+  { key: "ads.monthlyLimit", label: "Monthly limit", group: "Paid media", type: "number", userOnly: true, description: "What orders started this month may cost together. Unset: nothing is bought." },
+  {
+    key: "editor.autoRun", label: "Run the editor on a schedule", group: "Editor", type: "boolean", default: false, userOnly: true,
+    description: "Set on an always-on campaign: every few hours a bb automation starts the editor (and the author for open tasks), but only when code finds work for them. Off by default. Only the user sets this.",
   },
   { key: "generation.provider", label: "Provider", description: "Which provider generates creatives.", group: "Generation", type: "select", options: PROVIDERS.map((p) => p.id), default: PROVIDERS[0].id },
   ...PROVIDERS.flatMap((p) => [...p.fields, ...budgetFields(p)].map((f) => ({ ...f, key: `${p.id}.${f.key}`, group: p.label }))),

@@ -97,6 +97,8 @@ const goals = await q("select metric, kind, value from campaign_goal where campa
 const journal = await q("select kind, author, body from journal where campaign_id = $1", [baseId]);
 const tasks = await q("select status, claimed_by from task where campaign_id = $1", [baseId]);
 const state = (await q("select * from regulator_state where campaign_id = $1", [baseId]))[0];
+const learned = await q("select id, kind, evidence, lever, n_per_arm, created_by, experiment_id, decided_at from learning where campaign_id = $1", [baseId]);
+const armEntries = await q("select id, created_by, brief_id from content_calendar where campaign_id = any($1::uuid[])", [Object.values(armIds)]);
 const incumbentRow = state?.incumbent_entry_id ? (await q("select title, body from content_calendar where id = $1", [state.incumbent_entry_id]))[0] : null;
 const incumbent = incumbentRow?.title ?? null;
 const baselineBody = experiments[0]?.a_body ?? BODY;
@@ -113,6 +115,14 @@ check("the incumbent is safe", incumbentRow === null || expectedRates(incumbentR
 check("goals were not touched", goals.length === 2 && goals.some((g) => g.metric === "click_rate" && Number(g.value) === GOAL) && goals.some((g) => g.metric === "complaint_rate" && Number(g.value) === LIMIT_COMPLAINT), JSON.stringify(goals));
 check("the editor kept a journal every run", journal.filter((j) => j.kind === "run").length >= editorRuns - 1, `${journal.filter((j) => j.kind === "run").length} run entries for ${editorRuns} editor runs`);
 check("every conclusion became a learning", journal.filter((j) => j.kind === "learning").length === concluded.length, `${journal.filter((j) => j.kind === "learning").length} learnings`);
+const leverKey = (l) => (l ? `${l.attribute}|${[l.from, l.to].sort().join("|")}` : null);
+check("every conclusion is a structured learning (E1)", concluded.every((e) => learned.some((l) => l.experiment_id === e.id && l.evidence === "E1")), `${learned.filter((l) => l.evidence === "E1").length} E1 for ${concluded.length} conclusions`);
+check("E1 and E2 were written by code only", learned.filter((l) => l.evidence === "E1" || l.evidence === "E2").every((l) => ["regulator", "miner", "promotion"].includes(l.created_by)), learned.map((l) => `${l.evidence}:${l.created_by}`).join(","));
+check("every experiment was registered with an expected lift", experiments.every((e) => e.expected_lift !== null), experiments.map((e) => `${e.expected_lift ?? "none"} x${e.planned_rounds}`).join(" | "));
+check("no verdict before a series had all its rounds", concluded.every((e) => e.planned_rounds <= 1 || e.verdict === "freeze" || /unsafe/.test(e.result?.reasons?.[0] ?? "") || Number(e.result?.stats?.rounds ?? 1) >= e.planned_rounds), "fixed horizon");
+check("every experiment named its lever", experiments.every((e) => e.lever), experiments.map((e) => (e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "none")).join(" | "));
+check("no lever was re-tested while its null result stood", experiments.every((e) => !learned.some((l) => l.kind === "null_result" && leverKey(l.lever) === leverKey(e.lever) && Date.parse(l.decided_at) < Date.parse(e.created_at))), "the gate holds");
+check("every arm entry an author wrote is linked to a brief", armEntries.filter((x) => !["cli", "operator", "ui"].includes(x.created_by)).every((x) => x.brief_id), `${armEntries.filter((x) => x.brief_id).length} of ${armEntries.length} arm entries have a brief`);
 check("tasks were claimed and finished by an author", tasks.length > 0 && tasks.every((t) => t.status === "done" ? t.claimed_by : true), tasks.map((t) => t.status).join(","));
 const trueClick = (title, body) => expectedRates(title, body).click;
 const regressions = concluded.filter((e) => e.verdict === "B" && trueClick(e.b_title, e.b_body) < trueClick(e.a_title, e.a_body));

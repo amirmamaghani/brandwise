@@ -1,7 +1,7 @@
 // Calendar page of the BrandWise: a full-surface month/week calendar, and the approval queue as the
 // page's sidebar. The calendar is the only way anything leaves the system (docs/architecture.md), so
 // "what waits for me" stays visible next to it and a decision is one click (tier 2) or a review (tier 3).
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { CalendarEntry, Campaign, Creative, rpcContract } from "./server";
@@ -421,6 +421,58 @@ export function CalendarPage() {
 const SELECT = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 const TEXTAREA = "w-full resize-y rounded-md border border-input bg-background p-2 text-sm";
 
+const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "typo", "offer", "other"] as const;
+
+/** What the entry was written from: its brief (explore or exploit slot), the learnings it applies or tests, and its tags. */
+function EntryLearnings({ entry }: { entry: CalendarEntry }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }>; media: { action: string; budget: number; currency: string; days: number; status: string; platform: string | null; payment: string | null; boostOf: string | null } | null; experiment: { id: string; hypothesis: string; lever: string | null; variant: string | null; round: number; plannedRounds: number; expectedLift: number | null; mde: number | null; status: string; verdict: string | null } | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    rpc.call("entry_learnings", { id: entry.id }).then((r) => live && setInfo(r), () => live && setInfo(null));
+    return () => { live = false; };
+  }, [entry.id, rpc]);
+  if (info === null) return null;
+  const tags = Object.entries(info.attributes).filter(([, a]) => a.source !== "derived");
+  const byAgent = entry.createdBy !== "ui";
+  const mo = info.media;
+  const mediaBlock = mo ? (
+    <div className="flex flex-col gap-0.5 rounded-md border border-amber-500/50 p-2 text-xs">
+      <p><span className="font-medium">Paid media: {mo.action.replace("_", " ")}</span>, {mo.budget} {mo.currency} over {mo.days} day(s){mo.boostOf ? `, boosts ${mo.boostOf}` : ""} · {mo.status}{mo.platform ? ` on ${mo.platform}` : ""}{mo.payment ? `, paid with ${mo.payment}` : ""}</p>
+      <p className="text-muted-foreground">{mo.status === "draft"
+        ? "Approving lets the system spend this budget when its time comes. The brand's ads limits are checked again right before payment; the payment itself never passes through an agent."
+        : "Bought as approved. Spend, leads and CPL are on Results > Paid."}</p>
+    </div>
+  ) : null;
+  const exp = info.experiment;
+  const experimentBlock = exp ? (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border p-2 text-xs">
+      <p><span className="font-medium">Experiment {exp.id}</span>, variant {exp.variant === "A" ? "A (control)" : "B (challenger)"}, round {exp.round} of {exp.plannedRounds}{exp.verdict ? ` · verdict ${exp.verdict}` : ""}</p>
+      <p>{exp.hypothesis}{exp.lever ? ` (${exp.lever})` : ""}</p>
+      <p className="text-muted-foreground">Registered before the first send: expected {exp.expectedLift === null ? "n/a" : `+${Math.round(100 * exp.expectedLift)} %`}{exp.mde === null ? "" : `, the planned sample can show +${Math.round(100 * exp.mde)} % or more`}. Approve both variants as they are: the test compares them.</p>
+    </div>
+  ) : null;
+  if (info.briefId === null && info.applied.length === 0 && tags.length === 0) {
+    if (mediaBlock || experimentBlock) return <>{mediaBlock}{experimentBlock}</>;
+    return byAgent ? <p className="text-xs text-muted-foreground">No learnings declared: the author did not say which brief it wrote from.</p> : null;
+  }
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border p-2 text-sm">
+      {mediaBlock}
+      {experimentBlock}
+      <p className="text-xs text-muted-foreground">
+        Written from brief {info.briefId ?? "none"}{info.slot ? ` · ${info.slot} slot` : ""}
+      </p>
+      {info.applied.map((a) => (
+        <p key={a.id} className="text-xs">
+          <span className="font-medium">{a.mode === "test" ? "Tests" : "Applies"}</span> {a.id} ({a.evidence ?? "rule"}): {a.statement}
+        </p>
+      ))}
+      {tags.length ? <p className="text-xs text-muted-foreground">Tags: {tags.map(([k, a]) => `${k}=${a.value}`).join(", ")}</p> : null}
+    </div>
+  );
+}
+
 function EntryDialog({
   entry,
   mode,
@@ -438,6 +490,10 @@ function EntryDialog({
   const preview = creative === undefined ? null : (creative.dataUri ?? creative.thumb);
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
+  const [reason, setReason] = useState<string>("");
+  // how long the reviewer had the entry open: the review's cost is counted from it (capped on the server side of the report)
+  const openedAt = useRef<number>(Date.now());
+  const reviewSeconds = () => Math.round((Date.now() - openedAt.current) / 1000);
   const [form, setForm] = useState({ title: "", body: "", link: "", channel: CHANNELS[0], at: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -445,7 +501,9 @@ function EntryDialog({
   useEffect(() => {
     setEditing(false);
     setNote("");
+    setReason("");
     setError(null);
+    openedAt.current = Date.now();
     if (entry !== null) {
       setForm({ title: entry.title, body: entry.body, link: entry.link ?? "", channel: entry.channel, at: toLocalInput(new Date(entry.scheduledAt)) });
     }
@@ -466,8 +524,8 @@ function EntryDialog({
       setBusy(false);
     }
   };
-  const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision }), closeEntry);
-  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note }), closeEntry);
+  const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision, reviewSeconds: reviewSeconds() }), closeEntry);
+  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note, reason: reason === "" ? null : (reason as (typeof REVIEW_REASONS)[number]), reviewSeconds: reviewSeconds() }), closeEntry);
   const save = () => {
     if (entry === null) return;
     const timeChanged = form.at !== toLocalInput(new Date(entry.scheduledAt));
@@ -573,7 +631,14 @@ function EntryDialog({
                   )}
                   <dt className="text-muted-foreground">Created by</dt>
                   <dd>{entry.createdBy}</dd>
+                  {entry.approvedBy === null ? null : (
+                    <>
+                      <dt className="text-muted-foreground">Approved by</dt>
+                      <dd>{entry.approvedBy}{entry.approvedAt ? ` · ${whenOf(entry.approvedAt)}` : ""}</dd>
+                    </>
+                  )}
                 </dl>
+                <EntryLearnings key={`${entry.id}:${entry.briefId ?? ""}`} entry={entry} />
               </>
             )}
             {changing ? (
@@ -587,6 +652,13 @@ function EntryDialog({
                   aria-label="What should change"
                   autoFocus
                 />
+                <select className={SELECT} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason">
+                  <option value="">Reason (optional)</option>
+                  {REVIEW_REASONS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">The reason is counted: send-backs with the same reason become a rule the agents keep, once you confirm it on the Learnings page.</p>
               </div>
             ) : null}
             {entry.status === "pending_approval" && entry.tier === 3 && !editing && !changing ? (

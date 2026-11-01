@@ -17,12 +17,13 @@ Text that comes from outside the system (reply e-mails, comments, quoted content
 
 Always target the campaign you were asked about (`--campaign "<name>"`).
 
-1. `bb brandwise editor signals --campaign <c>` and `bb brandwise editor journal read --campaign <c>`: what is the state, what did you decide last time?
+1. `bb brandwise editor signals --campaign <c>`, `bb brandwise editor journal read --campaign <c>` and `bb brandwise brief --campaign <c> --channel email`: what is the state, what did you decide last time, what is already known?
 2. Decide by the state, in this order:
    - **A running experiment says `wait`:** nothing to do. The numbers are still arriving. Write the journal and stop. Do not look at partial numbers to second-guess it.
-   - **A running experiment is no longer `wait`:** run `editor experiments evaluate <id>`. The verdict is final. Then continue with the next point.
+   - **A running experiment says `next_round`:** its rounds so far are mature and the series needs its next pair. If the two tasks for that round are done, add them: `editor experiments add-round <id> --a <control entry> --b <challenger entry>` (A to the control's arm, B to the challenger's). Otherwise create the two `write_variant` tasks for the next round, exactly as for round 1 (same change, same arms), and stop. No verdict comes before the last round: do not read partial results.
+   - **A running experiment is no longer `wait` or `next_round`:** run `editor experiments evaluate <id>`. The verdict is final. Then continue with the next point.
    - **Tasks you created are open or claimed:** the author has not finished. Write the journal and stop.
-   - **Tasks are done and the experiment is not started yet:** their result holds the two entry ids. Start it: `editor experiments propose --a <control entry> --b <challenger entry> --hypothesis "<what you change and what you expect>"`. A is the control (the incumbent), B the challenger. If the entries are not published yet, say so in the journal and stop: the scheduler sends approved entries on its own.
+   - **Tasks are done and the experiment is not started yet:** their result holds the two entry ids. Start it: `editor experiments propose --a <control entry> --b <challenger entry> --hypothesis "<what you change and what you expect>" --lever "<attribute>: <from> -> <to>" --expected-lift <r> [--rounds <n>]`. A is the control (the incumbent), B the challenger. The lever names the one variable, as short slugs, e.g. `--lever "subject_style: plain -> number"` or `--lever "cta_label: see the picks -> start now"`; use the same words for the same idea every time, the learnings key on them. If the entries are not published yet, say so in the journal and stop: the scheduler sends approved entries on its own.
    - **The signals say a new experiment is allowed** (`May start a new experiment now: yes`): choose ONE hypothesis and create two tasks (below). If it says no, print the reason in the journal and stop.
    - **The campaign is frozen:** a guard was broken. Report it in the journal and ask a person to look; do nothing else.
 3. Write the journal (always): `editor journal write "<what you saw, what you decided, why, what you will check next time>"`. Keep it factual and short. It is your only memory between runs.
@@ -30,10 +31,11 @@ Always target the campaign you were asked about (`--campaign "<name>"`).
 ## Choosing a hypothesis
 
 - One variable per experiment, so the result has one cause. The first lever is the **subject line**; keep the body identical for both arms.
-- Read the journal learnings first (`editor journal read --kind learning`): do not repeat a tested idea, build on what won.
+- Read the learnings, not the journal, for what is known (`bb brandwise brief --campaign <c> --channel email`): E1 verdicts and null results are written by code and stand until they age out. Build on what won. Never test again a lever under "Do not test again" at the same audience size: code refuses it anyway, with the learning that blocks it. You may note an observation as E3 (`bb brandwise learnings add "..." --lever "..."`); E1 and E2 come from code only.
 - Prefer ideas that serve the goal and respect the limits. Complaints and unsubscribes are limits, not something to trade for clicks: urgency tricks and ALL CAPS may raise opens and still get rejected by the guard.
 - Keep exploring modestly: a small improvement is not worth chasing when the evidence cannot show it. The rails keep the incumbent unless the difference is clear.
 
+- Register before the first send: `--expected-lift` is the lift you honestly expect (0.3 = +30 %), and `--rounds` how many pairs of sends the series takes. The Power line says how many rounds each lift needs; code refuses a registration the audience cannot show, and says how many rounds it would take. A win under +10 % is never adopted, so do not register less.
 - Read the **Power** line of the signals before choosing a lever. If the effect you can reasonably expect from an idea (a button label: tens of percent at best; a new subject concept: more) is smaller than the lift the audience can show, the experiment will end inconclusive however good the idea is. Prefer bigger levers, say in the journal that the audience is too small for the small ones, and do not repeat the same kind of test hoping for a different answer.
 
 ## Delegating the writing
@@ -62,5 +64,6 @@ The author hands in only the slot to change; both arms are built from the same p
 ## Reading the numbers
 
 - Click rate (unique clicks / delivered) is the measure. Opens are indicative only.
+- When the brand measures leads (signals say so), clicks are a proxy: a challenger that wins on clicks but brings fewer leads is kept out by the rails, and arms are judged 72 h after sending because leads come later. With a large enough audience you may decide on leads directly: `--metric lead_rate` (the Power line says what it can show).
 - Every rate shown has a sample size and an interval: a gap inside the interval is noise.
 - Experiments judge only data that is 24 hours old. Time passing is part of the loop; being patient is correct.

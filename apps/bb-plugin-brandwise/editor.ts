@@ -3,6 +3,17 @@
 import type { Core } from "./core/index.ts";
 import type { Regulator } from "./core/regulator/index.ts";
 import type { Signals } from "./core/regulator/signals.ts";
+import { whoIsDue } from "./core/regulator/autorun.ts";
+
+/** What `editor autorun` needs from the host: which campaigns opted in, how to start an agent thread, and when it last did. */
+export type AutoRunHost = {
+  enabled: (campaignId: string) => Promise<boolean>;
+  spawn: (prompt: string, campaignId: string) => Promise<string>;
+  lastRun: (key: string) => Promise<number | null>;
+  setLastRun: (key: string, at: number) => Promise<void>;
+};
+/** An agent that was started less than this ago is still working or just finished: do not start another. */
+const AUTORUN_GAP_MS = 2 * 3_600_000;
 
 type Io = { val: (argv: string[], name: string) => string | undefined; positional: (argv: string[]) => string[]; reply: (value: unknown, text: string) => { exitCode: number; stdout: string }; usage: string };
 
@@ -28,14 +39,15 @@ export function fmtSignals(s: Signals): string {
   for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
   for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
   if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
-  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, an experiment can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive.`);
+  if (s.power?.leadRate != null) lines.push("", `Leads are measured: ${pct(s.power.leadRate, 2)} of delivered. A click win has to bring leads (the rails keep the control otherwise); a lead experiment (--metric lead_rate) can only show ${s.power.leadMinDetectableLift === null ? "very large effects" : `about ${pct(s.power.leadMinDetectableLift, 0)} or more per send`}.`);
+  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, one send can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive. A series of rounds shows less: ${s.power.roundsFor.map((r) => `+${Math.round(100 * r.lift)} % needs ${r.rounds ?? "more than 20"} round(s)`).join(", ")}.`);
   const p = s.allowed.proposeExperiment;
   lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
   for (const n of s.notes) lines.push(`Note: ${n}`);
   return lines.join("\n");
 }
 
-export function createEditorCli(deps: { core: () => Core; regulator: () => Regulator | null }) {
+export function createEditorCli(deps: { core: () => Core; regulator: () => Regulator | null; autorun?: AutoRunHost }) {
   /** The regulator works on the always-on base: a campaign (or a child of it) given on the command line resolves to its base. */
   async function base(args: string[], io: Io) {
     const c = await deps.core().campaigns.resolve(io.val(args, "--campaign"));
@@ -47,11 +59,20 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     if (!reg) return { exitCode: 1, stderr: "The regulator needs the database and the e-mail module: run infra/bb-instance/provision.sh apply" };
     const { val, positional, reply, usage } = io;
     const rest = positional(args.slice(2));
-    const who = val(args, "--as") ?? "agent";
+    const who = val(args, "--as")?.trim() || "agent";
+    // a label agents give themselves, never a reserved actor: "ui" is a person on a page, the others are code
+    if (["ui", "auto", "scheduler", "regulator", "miner", "promotion"].includes(who.toLowerCase())) return { exitCode: 1, stderr: `--as ${who} is reserved: it names a person on a page or the system` };
     const bad = { exitCode: 1, stderr: usage };
+    if (action === "autorun") return autorun(reg, io);
     if (!action || !["signals", "goals", "unfreeze", "experiments", "journal", "tasks"].includes(action)) return bad;   // no campaign lookup for a bare command
-    const b = await base(args, io);
     const asOf = val(args, "--as-of");
+    // an experiment id names its campaign: evaluate and add-round need no --campaign (the hint printed by propose has none)
+    if (action === "experiments" && (rest[0] === "evaluate" || rest[0] === "add-round") && rest[1] && !val(args, "--campaign")) {
+      const e = await reg.store.experiment(rest[1]);
+      if (!e) return { exitCode: 1, stderr: `No experiment ${rest[1]}` };
+      args = [...args, "--campaign", e.campaignId];
+    }
+    const b = await base(args, io);
 
     if (action === "signals") { const s = await reg.signals(b.id, asOf); return reply(s, fmtSignals(s)); }
     if (action === "goals") {
@@ -68,18 +89,31 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
     if (action === "experiments") {
       const sub = rest[0];
       if (sub === "propose") {
-        const [armA, armB, hypothesis] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis")];
+        const [armA, armB, hypothesis, lever, expected] = [val(args, "--a"), val(args, "--b"), val(args, "--hypothesis"), val(args, "--lever"), val(args, "--expected-lift")];
         if (!armA || !armB || !hypothesis) return bad;
-        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, createdBy: who });
-        return reply(e, `Experiment ${e.id} started: A ${e.armA} (control) against B ${e.armB} (challenger). The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}`);
+        if (!lever) return { exitCode: 1, stderr: 'Name the one thing the experiment changes: --lever "attribute: from -> to", e.g. --lever "subject_style: plain -> number"' };
+        if (!expected || !Number.isFinite(Number(expected))) return { exitCode: 1, stderr: "Register what you expect before the first send: --expected-lift 0.3 (+30 %). Code checks it against what the audience can show and says how many --rounds it needs." };
+        const rounds = Number(val(args, "--rounds") ?? 1);
+        const metric = val(args, "--metric") as "click_rate" | "lead_rate" | undefined;
+        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who, expectedLift: Number(expected), rounds, metric });
+        return reply(e, `Experiment ${e.id} registered and started: A ${e.armA} (control) against B ${e.armB} (challenger), lever ${e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "?"}, expected ${pct(e.expectedLift, 0)}, ${e.plannedRounds} round(s)${e.mde !== null ? `, can show ${pct(e.mde, 0)} or more` : ""}. The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}${e.plannedRounds > 1 ? `; after each mature round write the next pair and add it with: editor experiments add-round ${e.id} --a <control entry> --b <challenger entry>` : ""}`);
       }
+      if (sub === "add-round") {
+        const [a, bb] = [val(args, "--a"), val(args, "--b")];
+        if (!rest[1] || !a || !bb) return bad;
+        const e = await reg.experiments.addRound({ experimentId: rest[1], armA: a, armB: bb });
+        return reply(e, `Round ${e.rounds.length} of ${e.plannedRounds} added to experiment ${e.id}: A ${a}, B ${bb}.`);
+      }
+      if (sub === "backfill") { const n = await reg.experiments.backfill(b.id); return reply({ created: n }, `${n} structured learning(s) made from earlier verdicts.`); }
       if (sub === "evaluate") {
         if (!rest[1]) return bad;
         const r = await reg.experiments.evaluate(rest[1], asOf);
-        return reply(r, r.verdict === "wait" ? `Not ready: ${r.reasons.join("; ")}${r.readyAt ? ` (look again after ${r.readyAt.slice(0, 16)})` : ""}` : `Verdict ${r.verdict}${r.final ? " (final)" : ""}: ${r.reasons.join(" ") || "recorded earlier"}`);
+        return reply(r, r.verdict === "wait" ? `Not ready: ${r.reasons.join("; ")}${r.readyAt ? ` (look again after ${r.readyAt.slice(0, 16)})` : ""}`
+          : r.verdict === "next_round" ? `Next round: ${r.reasons.join(" ")} Create the two write_variant tasks for it, then: editor experiments add-round ${rest[1]} --a <control entry> --b <challenger entry>`
+          : `Verdict ${r.verdict}${r.final ? " (final)" : ""}: ${r.reasons.join(" ") || "recorded earlier"}`);
       }
       const list = await reg.experiments.list(b.id, val(args, "--status"));
-      return reply(list, list.map((e) => `${e.id}  ${e.status}${e.verdict ? " -> " + e.verdict : ""}  A ${e.armA}  B ${e.armB}  "${e.hypothesis}"`).join("\n") || "No experiments.");
+      return reply(list, list.map((e) => `${e.id}  ${e.status}${e.verdict ? " -> " + e.verdict : ""}  round ${e.rounds.length}/${e.plannedRounds}  expected ${pct(e.expectedLift, 0)}  A ${e.rounds.map((r) => r.armA).join(",")}  B ${e.rounds.map((r) => r.armB).join(",")}  "${e.hypothesis}"`).join("\n") || "No experiments.");
     }
     if (action === "journal") {
       if (rest[0] === "write") {
@@ -104,14 +138,45 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
       if (sub === "submit") { // an author's way to finish a write_variant task: only the subject is theirs, the rest comes from the task
         const subject = val(args, "--subject"), content = val(args, "--content");
         if (!rest[1] || (subject === undefined && content === undefined)) return bad;
-        const t = await reg.tasks.submitVariant(rest[1], { subject, content: content ? (JSON.parse(content) as Record<string, unknown>) : undefined }, who);
-        return reply(t, `Task ${t.id} done: entry ${(t.result as { entry: string }).entry} "${(t.result as { subject: string }).subject}" is in the calendar (${(t.result as { status: string }).status}).`);
+        const ids = (flag: string) => val(args, flag)?.split(",").map((x) => x.trim()).filter(Boolean);
+        const t = await reg.tasks.submitVariant(rest[1], { subject, content: content ? (JSON.parse(content) as Record<string, unknown>) : undefined, briefId: val(args, "--brief-id"), applies: ids("--applies"), tests: ids("--tests"), tags: val(args, "--tag") }, who);
+        const r = t.result as { entry: string; subject: string; status: string; brief?: string };
+        return reply(t, `Task ${t.id} done: entry ${r.entry} "${r.subject}" is in the calendar (${r.status}), written from brief ${r.brief ?? "?"}.`);
       }
       if (sub === "complete") { if (!rest[1]) return bad; const t = await reg.tasks.complete(rest[1], val(args, "--result") ? JSON.parse(val(args, "--result")!) : {}); return reply(t, `Task ${t.id} done.`); }
       const list = await reg.tasks.list(b.id, val(args, "--status"));
       return reply(list, list.map((t) => `${t.id}  ${t.status}${t.claimedBy ? " by " + t.claimedBy : ""}  ${t.kind}: ${t.brief}  ${JSON.stringify(t.params)}`).join("\n") || "No tasks.");
     }
     return bad;
+  }
+
+  /**
+   * The editor's alarm clock (a bb automation every few hours): for each always-on campaign that opted in (setting editor.autoRun),
+   * code decides who has work, and only then an agent thread is started. Prints nothing when nobody is due (a silent tick).
+   */
+  async function autorun(reg: Regulator, io: Io) {
+    const host = deps.autorun;
+    if (!host) return { exitCode: 1, stderr: "autorun needs the bb host (threads); it runs inside the plugin" };
+    const lines: string[] = [];
+    const started: { campaign: string; role: string; thread: string; reason: string }[] = [];
+    for (const c of (await deps.core().campaigns.list()).filter((x) => x.kind === "always_on")) {
+      if (!(await host.enabled(c.id))) continue;
+      const [s, tasks, experiments] = await Promise.all([reg.signals(c.id), reg.tasks.list(c.id), reg.experiments.list(c.id)]);
+      const due = whoIsDue(s, tasks, experiments);
+      for (const role of ["editor", "author"] as const) {
+        if (!due[role]) continue;
+        const key = `autorun:${role}:${c.id}`, last = await host.lastRun(key);
+        if (last !== null && Date.now() - last < AUTORUN_GAP_MS) continue;
+        const prompt = role === "editor"
+          ? `Run your editor loop once for the campaign "${c.name}" (use the editor skill). Be brief in your final answer.`
+          : `Do the open tasks of the campaign "${c.name}" (use the author skill). Be brief in your final answer.`;
+        const thread = await host.spawn(prompt, c.id);
+        await host.setLastRun(key, Date.now());
+        started.push({ campaign: c.name, role, thread, reason: due.reason });
+        lines.push(`${c.name}: started the ${role} (thread ${thread}): ${due.reason}`);
+      }
+    }
+    return io.reply(started, lines.join("\n"));
   }
 
   /** The development clock: lets a simulated provider and the rails live days in minutes. Only affects reports and simulated sends. */

@@ -6,6 +6,10 @@ export async function purge(core: ReturnType<typeof createCore>, prefix: string)
   const like = `${prefix}%`;
   const ids = "select id from campaign where name like $1";
   const run = (sql: string) => core.pool.query(sql, [like]);
+  await run(`delete from cost_entry where campaign_id in (${ids})`);
+  await run(`delete from conversion_status_event where (source_id, external_id) in (select source_id, external_id from conversion where root_id in (${ids}))`);
+  await run(`delete from conversion where root_id in (${ids})`);
+  await run(`delete from conversion_source where root_id in (${ids})`);
   await run(`delete from regulator_state where campaign_id in (${ids})`);
   await run(`delete from experiment where campaign_id in (${ids})`);
   await run(`delete from email_event where send_id in (select s.id from email_send s join content_calendar c on c.id = s.entry_id where c.campaign_id in (${ids}))`);

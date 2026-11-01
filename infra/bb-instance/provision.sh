@@ -18,6 +18,17 @@ plugin_dir="$(abs "$BW_PLUGIN_DIR")"
 unset BB_THREAD_ID BB_PROJECT_ID BB_ENVIRONMENT_ID BB_THREAD_STORAGE
 export BB_SERVER_URL="http://127.0.0.1:$BW_SERVER_PORT" BB_HOST_DAEMON_PORT="$BW_DAEMON_PORT"
 
+# bb installed only as the desktop app has no `bb` or `bb-app` on PATH: run the copies bundled in bb.app.
+bb_app_dist="/Applications/bb.app/Contents/Resources/app.asar.unpacked/node_modules/bb-app/dist"
+bb_runtime="/Applications/bb.app/Contents/MacOS/bb"
+bb_app_cmd=(bb-app)
+if ! command -v bb-app >/dev/null 2>&1 && [ -f "$bb_app_dist/bb-app.js" ]; then
+  bb_app_cmd=(env ELECTRON_RUN_AS_NODE=1 "$bb_runtime" "$bb_app_dist/bb-app.js")
+fi
+if ! command -v bb >/dev/null 2>&1 && [ -f "$bb_app_dist/bb.js" ]; then
+  bb() { BB_DATA_DIR="$data_dir" ELECTRON_RUN_AS_NODE=1 "$bb_runtime" "$bb_app_dist/bb.js" "$@"; }
+fi
+
 # `bb status` exits 0 even when nothing listens, so ask the port itself (000 = no answer)
 running() { [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BB_SERVER_URL/")" != 000 ]; }
 
@@ -28,7 +39,7 @@ start() {
   # bb refuses Host headers other than localhost/IPs and the hostname in BB_APP_URL (forbidden_host)
   if [ -n "${BW_TAILNET_HTTP_PORT:-}" ]; then export BB_APP_URL="http://$(tailnet_host):$BW_TAILNET_HTTP_PORT"; fi
   echo "starting bb-app (data dir $data_dir)"
-  nohup bb-app --data-dir "$data_dir" --server-port "$BW_SERVER_PORT" \
+  nohup "${bb_app_cmd[@]}" --data-dir "$data_dir" --server-port "$BW_SERVER_PORT" \
     --host-daemon-port "$BW_DAEMON_PORT" --no-in-app-updates \
     >"$data_dir/logs/bb-app.out" 2>&1 &
   for _ in $(seq 1 60); do running && return; sleep 1; done
@@ -84,24 +95,43 @@ apply() {
   echo "applied"; status
 }
 
-# The scheduler is a bb automation (script, every minute) that runs `calendar run-due`: it publishes approved entries whose time has come
-# and prints nothing otherwise, which bb records as a skipped tick. Idempotent: created once, its script is refreshed on every apply.
-# bb injects two wrong values into automation scripts, so the script fixes them: BB_SERVER_URL is the default server (the personal bb
+# BrandWise runs on bb automations (scripts) that call one `bb brandwise` command each and print nothing when there is nothing to do,
+# which bb records as a skipped tick. Idempotent: created once, the script is refreshed on every apply.
+# bb injects two wrong values into automation scripts, so each script fixes them: BB_SERVER_URL is the default server (the personal bb
 # on 38886), and BB_CLI is the launcher in <data dir>/bin, which re-execs BB_CLI forever (a fork storm). BB_CLI_DIR holds the real bb.
-SCHEDULER_NAME="BrandWise scheduler"
-SCHEDULER_SCRIPT='export BB_SERVER_URL="http://127.0.0.1:${BB_SERVER_PORT}" BB_CLI="${BB_CLI_DIR}/bb"
-"$BB_CLI" brandwise calendar run-due'
-ensure_scheduler() {
-  local project id
+automation_script() {
+  printf '%s\n%s' 'export BB_SERVER_URL="http://127.0.0.1:${BB_SERVER_PORT}" BB_CLI="${BB_CLI_DIR}/bb"' "\"\$BB_CLI\" brandwise $1"
+}
+# Automations and agent threads need a project. A fresh instance has none: create one rooted at the data dir, where AGENTS.md lives.
+ensure_project() {
+  if [ "$(bb project list --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" = 0 ]; then
+    bb project create --name "${BW_PROJECT_NAME:-BrandWise}" --root "$data_dir" >/dev/null
+    echo "created project ${BW_PROJECT_NAME:-BrandWise} ($data_dir)"
+  fi
+}
+ensure_automation() { # <name> <cron> <brandwise command> <timeout>
+  local name="$1" cron="$2" script project id
+  script=$(automation_script "$3")
   project=$(bb project list --json | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
-  id=$(bb automation list --project "$project" --json | python3 -c 'import json,sys;print(next((a["id"] for a in json.load(sys.stdin) if a["name"]=="'"$SCHEDULER_NAME"'"),""))')
+  id=$(bb automation list --project "$project" --json | python3 -c 'import json,sys;print(next((a["id"] for a in json.load(sys.stdin) if a["name"]=="'"$name"'"),""))')
   if [ -z "$id" ]; then
-    bb automation create --project "$project" --name "$SCHEDULER_NAME" --cron "* * * * *" --timezone UTC \
-      --script "$SCHEDULER_SCRIPT" --interpreter bash --timeout 90s >/dev/null
+    bb automation create --project "$project" --name "$name" --cron "$cron" --timezone UTC \
+      --script "$script" --interpreter bash --timeout "$4" >/dev/null
   else
-    bb automation update "$id" --project "$project" --script "$SCHEDULER_SCRIPT" --interpreter bash --timeout 90s >/dev/null
+    bb automation update "$id" --project "$project" --script "$script" --interpreter bash --timeout "$4" >/dev/null
     bb automation resume "$id" --project "$project" >/dev/null 2>&1 || true
   fi
+}
+# The scheduler publishes approved entries whose time has come (every minute).
+# The editor's alarm clock starts the editor or the author only on campaigns with editor.autoRun, and only when code finds work.
+# The miner looks for E2 patterns over matured entries once a week, the ads pull brings platform reports and spend every hour
+# (docs/analytics.md).
+ensure_scheduler() {
+  ensure_project
+  ensure_automation "BrandWise scheduler" "* * * * *" "calendar run-due" 90s
+  ensure_automation "BrandWise editor" "0 */6 * * *" "editor autorun" 120s
+  ensure_automation "BrandWise learnings" "30 3 * * 1" "learnings mine" 300s
+  ensure_automation "BrandWise ads" "10 * * * *" "ads pull" 120s
 }
 
 tailnet_host() { tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'; }
