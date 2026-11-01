@@ -13,138 +13,349 @@
 <meta property="og:url" content="https://brandwise.sh/">
 <meta property="og:image" content="https://brandwise.sh/og.png">
 <meta name="twitter:card" content="summary_large_image">
+<script>document.documentElement.classList.add("js")</script>
 <link rel="stylesheet" href="style.css">
+<script src="main.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-check-c" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.3l2.4 2.4 4.6-5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.8-4.8-8.7 8.8"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4l8.5 4.3L12 12.6 3.5 8.3z"/><path d="M3.5 12.2l8.5 4.3 8.5-4.3M3.5 16l8.5 4.3 8.5-4.3"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M10 9.3v5.4l4.6-2.7z"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M4.5 7.5l7.5 5.5 7.5-5.5"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M20 4L10.5 13.5M20 4l-6 16-3.5-6.5L4 10z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2L18 18M6 18l1.8-1.8M16.2 7.8L18 6"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9-1.9 5.1-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 16v4M16.5 18h4"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.5v4M15 3.5v4M7 7.5h10v3a5 5 0 0 1-10 0zM12 15.5v5"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6.5v11M15 6.5v11"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 6v12l10-6z"/></symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2.1-5L5 9"/><path d="M5 4.5V9h4.5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M9.5 7.5L5 12l4.5 4.5M5 12h9a5 5 0 0 1 0 10h-1"/></symbol>
+</svg>
+
 <div class="wrap">
 
-  <nav class="nav">
-    <a class="brand" href="/"><picture><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="" width="30"></picture>BrandWise</a>
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="/"><picture><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="" width="30" height="30"></picture>BrandWise</a>
     <div class="nav-links">
-      <a href="#approval">Approval</a>
-      <a href="#agents">Agents</a>
-      <a href="#numbers">Statistics</a>
-      <a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md">Docs</a>
+      <details class="menu">
+        <summary>Product<svg class="ic chev"><use href="#i-chev"/></svg></summary>
+        <div class="menu-panel">
+          <a href="#approval">Approval</a>
+          <a href="#agents">Agents</a>
+          <a href="#numbers">Statistics</a>
+          <a href="#editor">Editor loop</a>
+          <a href="#box">What is in the box</a>
+          <a href="#install">Installation</a>
+          <a href="#extend">Extending</a>
+        </div>
+      </details>
+      <details class="menu">
+        <summary>Docs<svg class="ic chev"><use href="#i-chev"/></svg></summary>
+        <div class="menu-panel">
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md">README</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/architecture.md">Architecture</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email.md">E-mail</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email-templates.md">E-mail templates</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/editor.md">Editor loop</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/assets.md">Assets</a>
+          <a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/roadmap.md">Roadmap</a>
+        </div>
+      </details>
+      <a class="nl" href="#approval">Approval</a>
+      <a class="nl" href="#agents">Agents</a>
+      <a class="nl" href="#numbers">Statistics</a>
       <a class="btn btn-primary btn-sm" href="https://github.com/amirmamaghani/brandwise">View on GitHub</a>
     </div>
   </nav>
 
+<main id="main">
+
   <header class="hero">
+    <a class="pill-link" href="#install"><span class="pill-text">Install with one command: npx create-brandwise</span><svg class="ic"><use href="#i-arrow"/></svg></a>
     <h1>Agents plan your marketing. You approve what goes out.</h1>
     <p class="sub">Agents draft the posts, e-mails and creatives. A calendar with human approval is the only way anything leaves, and results come back as numbers they can learn from.</p>
-    <div class="cta-row">
-      <a class="btn btn-primary" href="https://github.com/amirmamaghani/brandwise">View on GitHub</a>
-      <a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#installation">Quick start</a>
-    </div>
     <div class="install">
-      <button class="cmd" id="copy" type="button" aria-label="Copy command"><span class="d">$</span><span class="t">npx create-brandwise</span><span class="c">Copy</span></button>
-      <span class="note">Free, open source, MIT licensed. Early: it works end to end, with rough edges.</span>
+      <div class="install-pair">
+        <div class="choice">
+          <a class="btn btn-primary btn-lg" href="https://github.com/amirmamaghani/brandwise"><svg class="ic"><use href="#i-code"/></svg>View on GitHub</a>
+          <p class="choice-note"><a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#installation">Quick start</a> in the README</p>
+        </div>
+        <div class="choice">
+          <button class="btn btn-ghost btn-lg cmd" type="button" data-copy="npx create-brandwise"><span class="d">$</span><span class="t">npx create-brandwise</span><span class="c">Copy</span><span class="toast" aria-hidden="true"></span></button>
+          <p class="choice-note">macOS or Linux, Node 24, pnpm, Docker, bb 0.48 or newer</p>
+        </div>
+      </div>
+      <p class="note">Free, open source, MIT licensed. Early: it works end to end, with rough edges.</p>
+    </div>
+    <div class="works">
+      <h2>Works with</h2>
+      <ul><li>Telegram</li><li>E-mail via Resend</li><li>Remotion</li><li>Higgsfield</li><li>Postgres</li><li>S3</li></ul>
     </div>
   </header>
 
-  <div class="mockwrap" aria-hidden="true">
-    <div class="mock">
-      <div class="mock-bar"><i></i><i></i><i></i><span>BrandWise · Calendar</span></div>
-      <div class="mock-body">
-        <div class="side">
-          <div class="item on">Calendar</div><div class="item">Creatives</div><div class="item">Campaigns</div><div class="item">Video</div><div class="item">Settings</div>
+  <figure class="demo" id="demo" data-step="5" data-news="pub" data-teaser="pend" data-stats="on">
+    <div class="win" id="win">
+      <div class="win-bar" aria-hidden="true">
+        <span class="lights"><i></i><i></i><i></i></span>
+        <span class="win-title">BrandWise · Calendar</span>
+        <span class="win-tick"><i class="spin"></i><code>calendar run-due</code></span>
+      </div>
+      <div class="win-body">
+        <div class="side" aria-hidden="true">
+          <div class="item on"><svg class="ic"><use href="#i-cal"/></svg>Calendar</div>
+          <div class="item"><svg class="ic"><use href="#i-img"/></svg>Creatives</div>
+          <div class="item"><svg class="ic"><use href="#i-layers"/></svg>Campaigns</div>
+          <div class="item"><svg class="ic"><use href="#i-film"/></svg>Video</div>
+          <div class="item"><svg class="ic"><use href="#i-gear"/></svg>Settings</div>
           <div class="lbl">Waiting for approval</div>
-          <div class="q"><i class="dot"></i><span>Launch teaser reel<br><small>Instagram · tier 2</small></span></div>
-          <div class="q"><i class="dot"></i><span>November newsletter<br><small>E-mail · tier 3</small></span></div>
-          <div class="q"><i class="dot"></i><span>Webinar reminder<br><small>Telegram · tier 2</small></span></div>
+          <div class="queue">
+            <div class="q" data-q="teaser"><i class="dot"></i><span>Launch teaser reel<br><small>Instagram · tier 2</small></span></div>
+            <div class="q" data-q="news"><i class="dot"></i><span>November newsletter<br><small>E-mail · tier 3</small></span></div>
+            <div class="q" data-q="webinar"><i class="dot"></i><span>Webinar reminder<br><small>Telegram · tier 2</small></span></div>
+          </div>
         </div>
         <div class="main">
-          <div class="hd"><span>November 2026 · Week 46</span><div class="chips"><span>All campaigns</span><span>All channels</span></div></div>
-          <div class="week">
-            <div class="day"><b>Mon 9</b><div class="ev pub">Weekly digest<small>E-mail · published</small></div></div>
-            <div class="day"><b>Tue 10</b><div class="ev">Product tips<small>Telegram · approved</small></div><div class="ev pend">Launch teaser reel<small>Instagram · needs approval</small></div></div>
-            <div class="day"><b>Wed 11</b></div>
-            <div class="day"><b>Thu 12</b><div class="ev pend">November newsletter<small>E-mail · needs approval</small></div></div>
-            <div class="day"><b>Fri 13</b><div class="ev">Webinar reminder<small>Telegram · approved</small></div></div>
+          <div class="hd" aria-hidden="true"><span>November 2026 · Week 46</span><div class="chips"><span>All campaigns</span><span>All channels</span></div></div>
+          <div class="week" aria-hidden="true">
+            <div class="day d1"><b>Mon 9</b><div class="ev pub">Weekly digest<small>E-mail · published</small></div></div>
+            <div class="day d2"><b>Tue 10</b><div class="ev">Product tips<small>Telegram · approved</small></div><div class="ev" data-ev="teaser">Launch teaser reel<small>Instagram · <span class="sl"><span data-v="pend">needs approval</span><span data-v="ok">approved</span><span data-v="back">sent back</span></span></small></div></div>
+            <div class="day d3"><b>Wed 11</b></div>
+            <div class="day d4"><b>Thu 12</b><div class="ghost"><i class="spin"></i><span>Agent drafting</span></div><div class="ev" data-ev="news">November newsletter<small>E-mail · <span class="sl"><span data-v="pend">needs approval</span><span data-v="ok">approved</span><span data-v="back">sent back</span><span data-v="pub">published</span></span></small></div></div>
+            <div class="day d5"><b>Fri 13</b><div class="ev">Webinar reminder<small>Telegram · approved</small></div></div>
           </div>
-          <div class="approve"><div class="tx"><b>Launch teaser reel</b><small>Drafted by an agent · Instagram · Tue 10, 09:00 · tier 2</small></div><span class="b">Send back</span><span class="b p">Approve</span></div>
+          <div class="dock">
+            <div class="approve" id="approve">
+              <div class="face" data-f="news" inert><div class="tx"><b>November newsletter</b><small>Drafted by an agent · E-mail · Thu 12 · tier 3</small></div><button class="b" type="button" data-act="back">Send back</button><button class="b p" type="button" data-act="approve">Approve</button></div>
+              <div class="face msg ok" data-f="ok" inert><svg class="ic"><use href="#i-check-c"/></svg><div class="tx"><b>Approved</b><small>The approval records who gave it and why.</small></div></div>
+              <div class="face msg" data-f="back" inert><svg class="ic"><use href="#i-back"/></svg><div class="tx"><b>Sent back with a change request</b><small>The agent revises the draft.</small></div></div>
+              <div class="face msg" data-f="run" inert><i class="spin"></i><div class="tx"><b>Scheduler</b><small><code>calendar run-due</code> hands it to E-mail via Resend</small></div></div>
+              <div class="face on" data-f="teaser"><div class="tx"><b>Launch teaser reel</b><small>Drafted by an agent · Instagram · Tue 10, 09:00 · tier 2</small></div><button class="b" type="button" data-act="back">Send back</button><button class="b p" type="button" data-act="approve">Approve</button></div>
+              <div class="face msg ok" data-f="t-ok" inert><svg class="ic"><use href="#i-check-c"/></svg><div class="tx"><b>Approved</b><small>Instagram has no connector, so it waits as "Publish by hand".</small></div></div>
+              <div class="face msg" data-f="t-back" inert><svg class="ic"><use href="#i-back"/></svg><div class="tx"><b>Sent back with a change request</b><small>The agent revises the draft.</small></div></div>
+            </div>
+            <div class="mstats" aria-hidden="true">
+              <div class="mstats-hd"><b>Statistics</b><span>November newsletter</span></div>
+              <div class="mgrid">
+                <div><span>Delivered</span><b>1,842</b></div>
+                <div><span>Open rate</span><b>41.2 %</b></div>
+                <div><span>Click rate</span><b>3.1 %</b></div>
+                <div><span>Bounce rate</span><b>0.4 %</b></div>
+                <div><span>Unsubscribe rate</span><b>n/a</b></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-    <p class="note" style="text-align:center;margin:10px 0 0">Illustration with sample data.</p>
-  </div>
+    <figcaption class="demo-cap">
+      <span class="vh">Interactive preview of the BrandWise calendar: an agent drafts an entry, it waits for approval, a person approves or sends it back, the scheduler publishes it and the statistics arrive.</span>
+      <ol class="rail" id="rail" aria-hidden="true">
+        <li class="done"><span class="n">1</span><span class="l">Agent drafts</span></li>
+        <li class="done"><span class="n">2</span><span class="l">Needs approval</span></li>
+        <li class="done"><span class="n">3</span><span class="l">A person approves</span></li>
+        <li class="done"><span class="n">4</span><span class="l">Scheduler publishes</span></li>
+        <li class="done cur"><span class="n">5</span><span class="l">Numbers arrive</span></li>
+      </ol>
+      <span class="demo-foot">
+        <span class="note">Illustration with sample data.</span>
+        <span class="ctl">
+          <button class="ibtn" type="button" id="demo-pause" aria-label="Pause the preview"><svg class="ic"><use href="#i-pause"/></svg></button>
+          <button class="ibtn" type="button" id="demo-replay" aria-label="Replay the preview"><svg class="ic"><use href="#i-replay"/></svg></button>
+        </span>
+      </span>
+      <span class="vh" role="status" id="demo-status"></span>
+    </figcaption>
+  </figure>
 
-  <div class="proof">
-    <h2>Works with</h2>
-    <ul><li>Telegram</li><li>E-mail via Resend</li><li>Remotion</li><li>Higgsfield</li><li>Postgres</li><li>S3</li></ul>
-  </div>
-
-  <section class="band" id="approval">
+  <section class="band reveal" id="approval">
     <div class="split">
-      <div>
+      <div class="visual">
+        <div class="card tiers"><div class="rows">
+          <div class="row"><b>Tier 1</b><span>Routine post</span><em class="pill ok">Passes automatically</em></div>
+          <div class="row"><b>Tier 2</b><span>New campaign content</span><em class="pill att">One click</em></div>
+          <div class="row"><b>Tier 3</b><span>Prices, guarantees, claims</span><em class="pill">Manual approval</em></div>
+        </div>
+        <div class="tiers-foot"><svg class="ic"><use href="#i-person"/></svg>The writer of an entry is never its approver.</div></div>
+      </div>
+      <div class="copy">
         <h2>Nothing leaves without a yes.</h2>
         <p>Agents create and edit calendar entries. They never publish and never approve. When an approved entry is due, a scheduler hands it to a connector.</p>
         <p>Low-risk entries can pass on their own, others wait for one click, and anything sensitive needs a deliberate manual approval. When unsure, the higher tier wins.</p>
+        <p>Whoever writes an entry can never approve it, and every approval records who gave it and why. Approval is a role: a person or, by design, a dedicated approver agent working under a policy set per campaign.</p>
+        <p class="caveat"><b>Today</b> every approval above tier 1 is given by a person in the Calendar page. Approver agents and their policies are designed but not built yet, so by default every tier above 1 waits for a person.</p>
       </div>
-      <div class="card"><div class="rows">
-        <div class="row"><b>Tier 1</b><span>Routine post</span><em class="pill ok">Passes automatically</em></div>
-        <div class="row"><b>Tier 2</b><span>New campaign content</span><em class="pill att">One click</em></div>
-        <div class="row"><b>Tier 3</b><span>Prices, guarantees, claims</span><em class="pill">Manual approval</em></div>
-      </div></div>
     </div>
   </section>
 
-  <section class="band" id="agents">
+  <section class="band reveal" id="agents">
     <div class="split">
-      <div class="card"><div class="code"><span class="m"># what an agent runs (you can run the same)</span>
-<span class="k">calendar add</span> "Launch teaser" \
-  --channel instagram --tier 2 \
-  --at 2026-11-10T09:00Z
-<span class="k">creative generate</span> ...
-<span class="k">email stats</span> &lt;entry&gt;</div></div>
-      <div>
+      <div class="copy">
         <h2>Agents propose. Code decides.</h2>
         <p>Every page has an agent that knows which campaign and project you are looking at. It drafts, generates creatives, edits video and reads the results, using the same commands you can run yourself.</p>
+        <p>Agents get tools, not credentials: they use the <code>bb brandwise</code> CLI, also reachable over MCP, and "Start agent" sits in the side panel of every page.</p>
         <p>For e-mail an editor agent closes the loop: it reads the numbers, runs one A/B test at a time and briefs author agents. Code judges the result (sample size, significance, complaint guards); only you set the goals.</p>
         <p>API keys stay in settings and are never shown to it. Failed sends retry, then surface in the calendar with the reason.</p>
       </div>
+      <div class="visual">
+        <div class="card term loop" data-loop="7600,500">
+          <div class="term-bar" aria-hidden="true"><svg class="ic"><use href="#i-term"/></svg><span>Terminal</span></div>
+          <div class="code"><span class="ln m a" style="--d:.2s;--n:42"># what an agent runs (you can run the same)</span>
+<span class="ln a ty" style="--d:.9s;--n:44"><span class="p">bb brandwise</span> <span class="k">calendar add</span> "Launch teaser" \</span>
+<span class="ln a ty" style="--d:2.1s;--n:31">  --channel instagram --tier 2 \</span>
+<span class="ln a ty" style="--d:3s;--n:24">  --at 2026-11-10T09:00Z</span>
+<span class="ln a ty" style="--d:3.9s;--n:34"><span class="p">bb brandwise</span> <span class="k">creative generate</span> ...</span>
+<span class="ln a ty" style="--d:5s;--n:32"><span class="p">bb brandwise</span> <span class="k">email stats</span> &lt;entry&gt;<i class="caret" aria-hidden="true"></i></span></div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section class="band" id="numbers">
+  <section class="band reveal" id="numbers">
     <div class="split">
-      <div>
+      <div class="visual">
+        <div class="card stats stagger">
+          <div class="stat"><span>Example</span><b></b><em>sample numbers for illustration</em></div>
+          <div class="stat"><span>Delivered</span><b>1,842</b></div>
+          <div class="stat"><span>Click rate</span><b>3.1 %</b><em>reliable</em></div>
+          <div class="stat"><span>Bounce rate</span><b>0.4 %</b></div>
+          <div class="stat"><span>Open rate</span><b>41.2 %</b><em>indicative: mail privacy proxies inflate opens</em></div>
+          <div class="stat"><span>Unsubscribe rate</span><b>n/a</b><em>not reported by this provider</em></div>
+        </div>
+      </div>
+      <div class="copy">
         <h2>Swap providers. Keep your numbers.</h2>
         <p>Opens, clicks and bounces are computed from your own records in one provider-neutral format, so replacing the e-mail provider does not break a single report. A metric a provider cannot report shows as n/a, never as a made-up zero.</p>
       </div>
-      <div class="card">
-        <div class="stat"><span>Example</span><b></b><em>sample numbers for illustration</em></div>
-        <div class="stat"><span>Delivered</span><b>1,842</b></div>
-        <div class="stat"><span>Click rate</span><b>3.1 %</b><em>reliable</em></div>
-        <div class="stat"><span>Bounce rate</span><b>0.4 %</b></div>
-        <div class="stat"><span>Open rate</span><b>41.2 %</b><em>indicative: mail privacy proxies inflate opens</em></div>
-        <div class="stat"><span>Unsubscribe rate</span><b>n/a</b><em>not reported by this provider</em></div>
+    </div>
+  </section>
+
+  <section class="band reveal" id="editor">
+    <div class="split">
+      <div class="copy">
+        <h2>The editor loop, judged by code.</h2>
+        <p>The editor agent picks one hypothesis at a time and author agents write the variant, which goes out through the same calendar as everything else. Code judges the result: maturity, minimum sample, significance plus a minimum lift, cooldown, complaint and unsubscribe guards.</p>
+        <p>Only a person sets the goals and clears a freeze. The whole loop is testable in minutes on a simulated provider and clock.</p>
+        <p><a class="tlink" href="https://github.com/amirmamaghani/brandwise/blob/main/docs/editor.md">How the editor loop works<svg class="ic"><use href="#i-arrow"/></svg></a></p>
+      </div>
+      <div class="visual">
+        <div class="card fan loop" data-loop="5600,500" role="img" aria-label="Illustration: the editor agent hands a variant to author agents, it goes out through the calendar, then code checks maturity, sample, significance and guards; a person sets the goals.">
+          <div class="fan-hd" aria-hidden="true"><picture><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="" width="16" height="16"></picture><b>Editor loop</b><span>one test at a time</span></div>
+          <div class="fan-list" aria-hidden="true">
+            <div class="fr lead a" style="--d:.1s"><span class="tile"><svg class="ic"><use href="#i-spark"/></svg></span><span class="fx"><b>Editor agent</b><small>Reads the numbers, picks one hypothesis</small></span><span class="st"><span class="s1" style="--t:4s"><i class="pulse"></i>steering</span><span class="s2" style="--t:4s"><svg class="ic"><use href="#i-check-c"/></svg>done</span></span></div>
+            <div class="kids">
+              <div class="fr a" style="--d:.6s"><span class="tile"><svg class="ic"><use href="#i-spark"/></svg></span><span class="fx"><b>Author agents</b><small>Write the variant</small></span><span class="st"><span class="s1" style="--t:2.3s"><i class="pulse"></i>running</span><span class="s2" style="--t:2.3s"><svg class="ic"><use href="#i-check-c"/></svg>done</span></span></div>
+              <div class="fr a" style="--d:1s"><span class="tile"><svg class="ic"><use href="#i-cal"/></svg></span><span class="fx"><b>Calendar</b><small>Approval, then the send</small></span><span class="st"><span class="s1" style="--t:3s"><i class="pulse"></i>running</span><span class="s2" style="--t:3s"><svg class="ic"><use href="#i-check-c"/></svg>done</span></span></div>
+              <div class="fr a" style="--d:1.4s"><span class="tile"><svg class="ic"><use href="#i-code"/></svg></span><span class="fx"><b>Code</b><small>Maturity, minimum sample, significance, lift</small></span><span class="st"><span class="s1" style="--t:3.7s"><i class="pulse"></i>judging</span><span class="s2" style="--t:3.7s"><svg class="ic"><use href="#i-check-c"/></svg>done</span></span></div>
+              <div class="fr a" style="--d:1.8s"><span class="tile"><svg class="ic"><use href="#i-plug"/></svg></span><span class="fx"><b>Guards</b><small>Cooldown, complaints, unsubscribes</small></span><span class="st"><span class="s1" style="--t:3.4s"><i class="pulse"></i>watching</span><span class="s2" style="--t:3.4s"><svg class="ic"><use href="#i-check-c"/></svg>done</span></span></div>
+            </div>
+            <div class="fr human a" style="--d:2.4s"><span class="tile"><svg class="ic"><use href="#i-person"/></svg></span><span class="fx"><b>A person</b><small>Sets the goals, clears a freeze</small></span></div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="band">
+  <section class="band reveal" id="box">
+    <div class="sec-hd">
+      <h2>What is in the box.</h2>
+      <p>BrandWise is an open-source, agent-driven marketing system that runs on <a class="ul" href="https://getbb.app">bb</a>.</p>
+    </div>
+    <div class="grid3">
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-layers"/></svg></span><h3>Campaigns</h3><p>An always-on base for a brand or product, plus time-bound campaigns that inherit from it.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-cal"/></svg></span><h3>Calendar</h3><p>Month and week views, an approval queue, change requests, retries and failure reasons.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-send"/></svg></span><h3>Publishing</h3><p><code>calendar run-due</code> fires every minute as a bb automation. Connectors for Telegram, e-mail (Resend) and a <code>mock</code> test connector; channels without a connector wait as "Publish by hand".</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-img"/></svg></span><h3>Creatives</h3><p>A library of images and videos in S3 with thumbnails, AI provenance, upload and editing. Higgsfield image and video generation with per-call and daily credit limits.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-film"/></svg></span><h3>Video <span class="badge">Optional</span></h3><p>Remotion projects per campaign, with Remotion Studio embedded next to an agent chat. Renders land in Creatives.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-mail"/></svg></span><h3>E-mail templates <span class="badge">Optional</span></h3><p>MJML templates per campaign with slots and a brand file, a live preview page and lint (unsubscribe, postal address, size, alt text, links, ...). Full-page pictures for agents, test sends, and an agent that edits the template while you watch.</p></article>
+    </div>
+  </section>
+
+  <section class="band reveal" id="install">
+    <div class="split">
+      <div class="visual">
+        <div class="card term wiz loop" data-loop="9200,500" role="img" aria-label="Illustration: the installer asks where Postgres and S3 live, about publishing channels and the display mode, then sets everything up.">
+          <div class="term-bar" aria-hidden="true"><svg class="ic"><use href="#i-term"/></svg><span>Terminal</span></div>
+          <div class="code" aria-hidden="true"><span class="ln a ty" style="--d:.2s;--n:22"><span class="m">$</span> npx create-brandwise</span>
+<span class="ln a" style="--d:1.6s"><span class="k">▸</span> Setup</span>
+<span class="ln a" style="--d:2s">  Where do Postgres and S3 storage live?</span>
+<span class="ln a opt" style="--d:2.4s">    <span class="sel">1) Local</span>  2) Remote  3) Already running</span>
+<span class="ln a" style="--d:3.1s">  Add publishing channels now? <span class="m">y/N</span></span>
+<span class="ln a" style="--d:3.7s">  Which display mode?</span>
+<span class="ln a opt" style="--d:4.1s">    <span class="sel">1) Minimal</span>  2) Full</span>
+<span class="ln a" style="--d:4.9s"><span class="k">▸</span> bb <span class="m">·</span> BrandWise <span class="m">·</span> Dependencies</span>
+<span class="ln a" style="--d:5.6s"><span class="k">▸</span> Configuration <span class="m">·</span> bb instance and plugin</span>
+<span class="ln a ok" style="--d:6.5s">✓ Done.</span></div>
+        </div>
+      </div>
+      <div class="copy">
+        <h2>Installed with one command.</h2>
+        <p><code>npx create-brandwise</code> asks a few questions, then installs bb if it is missing, clones BrandWise, installs the dependencies, writes <code>.env</code> and provisions the instance.</p>
+        <ol class="qs">
+          <li><b>Postgres and S3</b><span>Local in Docker, remote, or already running.</span></li>
+          <li><b>Publishing channels</b><span>Optional Telegram and Resend keys; they can be added later.</span></li>
+          <li><b>Display mode</b><span>Minimal (marketing only) or full.</span></li>
+        </ol>
+        <p class="req"><b>Requirements:</b> one machine on macOS or Linux, Node 24, pnpm, Docker, bb 0.48 or newer.</p>
+        <div class="row-actions">
+          <button class="btn btn-ghost cmd" type="button" data-copy="npx create-brandwise"><span class="d">$</span><span class="t">npx create-brandwise</span><span class="c">Copy</span><span class="toast" aria-hidden="true"></span></button>
+          <a class="tlink" href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#installation">Installation guide<svg class="ic"><use href="#i-arrow"/></svg></a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band statement reveal">
     <h2>Fully yours.</h2>
     <p>One command, <code>npx create-brandwise</code>, installs it on your machine with a local or your own Postgres and any S3-compatible storage. Campaigns, calendar, creatives and statistics stay with you.</p>
     <p>It is MIT licensed. Add a channel with one small connector, an e-mail provider with one adapter file, and make the rest your own.</p>
+    <div class="cta-row"><a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise">Source<svg class="ic"><use href="#i-arrow"/></svg></a></div>
   </section>
 
-  <section class="band cta">
+  <section class="band reveal" id="extend">
+    <div class="sec-hd"><h2>Extending.</h2></div>
+    <div class="grid3">
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-plug"/></svg></span><h3>New channel</h3><p>One small connector module with <code>publish(entry)</code>.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-mail"/></svg></span><h3>New e-mail provider</h3><p>One adapter file that passes the shared contract tests.</p></article>
+      <article class="fcard"><span class="tile"><svg class="ic"><use href="#i-spark"/></svg></span><h3>New generation provider</h3><p>Lives in <code>packages/core/src/providers</code>.</p></article>
+    </div>
+  </section>
+
+  <section class="band cta reveal">
     <h2>Put your agents to work.</h2>
     <p>Free and open source. Early software, built in the open.</p>
-    <div class="cta-row"><a class="btn btn-primary" href="https://github.com/amirmamaghani/brandwise">View on GitHub</a><a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">Contribute</a></div>
+    <div class="install-pair">
+      <div class="choice">
+        <a class="btn btn-primary btn-lg" href="https://github.com/amirmamaghani/brandwise"><svg class="ic"><use href="#i-code"/></svg>View on GitHub</a>
+        <p class="choice-note"><a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md#installation">Quick start</a> in the README</p>
+      </div>
+      <div class="choice">
+        <button class="btn btn-ghost btn-lg cmd" type="button" data-copy="npx create-brandwise"><span class="d">$</span><span class="t">npx create-brandwise</span><span class="c">Copy</span><span class="toast" aria-hidden="true"></span></button>
+        <p class="choice-note">macOS or Linux, Node 24, pnpm, Docker, bb 0.48 or newer</p>
+      </div>
+    </div>
+    <div class="cta-row"><a class="btn btn-ghost" href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">Contribute</a></div>
   </section>
 
+</main>
+
   <footer class="footer">
-    <picture class="footer-mark"><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="BrandWise" width="30"></picture>
-    <div><div class="ft">Project</div><ul><li><a href="https://github.com/amirmamaghani/brandwise">Source</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md">README</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/roadmap.md">Roadmap</a></li></ul></div>
-    <div><div class="ft">Docs</div><ul><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/architecture.md">Architecture</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email.md">E-mail</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/editor.md">Editor loop</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/assets.md">Assets</a></li></ul></div>
-    <div><div class="ft">Community</div><ul><li><a href="https://github.com/amirmamaghani/brandwise/issues">Issues</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">Contributing</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/SECURITY.md">Security</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li></ul></div>
+    <picture class="footer-mark"><source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.svg"><img src="images/logo.svg" alt="BrandWise" width="30" height="30"></picture>
+    <div><h2 class="ft">Project</h2><ul><li><a href="https://github.com/amirmamaghani/brandwise">Source</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/README.md">README</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/roadmap.md">Roadmap</a></li></ul></div>
+    <div><h2 class="ft">Docs</h2><ul><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/architecture.md">Architecture</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email.md">E-mail</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/email-templates.md">E-mail templates</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/editor.md">Editor loop</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/docs/assets.md">Assets</a></li></ul></div>
+    <div><h2 class="ft">Community</h2><ul><li><a href="https://github.com/amirmamaghani/brandwise/issues">Issues</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CONTRIBUTING.md">Contributing</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/SECURITY.md">Security</a></li><li><a href="https://github.com/amirmamaghani/brandwise/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li></ul></div>
     <div class="pub-line">&copy; 2026 Amir Mamaghani. MIT licensed. Remotion, used by the optional video engine, has its own licence. Marketing e-mail needs recipient consent and a working unsubscribe, and AI-written claims in regulated areas must be reviewed by a human.</div>
   </footer>
 </div>
-<script>
-document.getElementById("copy").addEventListener("click",function(){var b=this;navigator.clipboard.writeText("npx create-brandwise").then(function(){var c=b.querySelector(".c");b.classList.add("copied");c.textContent="Copied";setTimeout(function(){b.classList.remove("copied");c.textContent="Copy"},1600)})});
-</script>
+<span class="vh" role="status" id="copy-status"></span>
 </body>
 </html>
