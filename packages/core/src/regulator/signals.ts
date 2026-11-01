@@ -8,10 +8,10 @@ export const GOAL_METRICS = ["click_rate", "complaint_rate", "unsubscribe_rate",
 export type GoalMetric = (typeof GOAL_METRICS)[number];
 export type Goal = { metric: GoalMetric; kind: "target" | "limit"; value: number };
 
-export type SendView = { entryId: string; title: string; campaignId: string; sentAt: string | null; counts: Counts; measured?: ArmData["measured"] };
-export type ExperimentView = { id: string; hypothesis: string; armA: string; armB: string; status: "running" | "concluded"; verdict: string | null; createdAt: string; concludedAt: string | null; reasons?: string[]; rounds?: { armA: string; armB: string }[]; plannedRounds?: number };
+export type SendView = { entryId: string; title: string; campaignId: string; sentAt: string | null; counts: Counts; measured?: ArmData["measured"]; leads?: number };
+export type ExperimentView = { id: string; hypothesis: string; armA: string; armB: string; status: "running" | "concluded"; verdict: string | null; createdAt: string; concludedAt: string | null; reasons?: string[]; rounds?: { armA: string; armB: string }[]; plannedRounds?: number; metric?: string };
 
-export const armOf = (v: SendView): ArmData => ({ entryId: v.entryId, sentAt: v.sentAt, delivered: v.counts.delivered, clicks: v.counts.clicked.unique, complaints: v.counts.complained, unsubscribes: v.counts.unsubscribed, measured: v.measured });
+export const armOf = (v: SendView): ArmData => ({ entryId: v.entryId, sentAt: v.sentAt, delivered: v.counts.delivered, clicks: v.counts.clicked.unique, complaints: v.counts.complained, unsubscribes: v.counts.unsubscribed, measured: v.measured, leads: v.leads });
 
 const rateOf = (metric: GoalMetric, a: { delivered: number; clicks: number; complaints: number; unsubscribes: number; bounced: number; sent: number }) =>
   metric === "click_rate" ? a.clicks / a.delivered : metric === "complaint_rate" ? a.complaints / a.delivered : metric === "unsubscribe_rate" ? a.unsubscribes / a.delivered : a.bounced / a.sent;
@@ -24,7 +24,7 @@ export type Signals = {
   recent: { entryId: string; title: string; sentAt: string | null; mature: boolean; maturesAt: string | null; delivered: number; clickRate: number | null; clickRateCi: [number, number] | null; complaintRate: number | null; unsubscribeRate: number | null; guard: string | null }[];
   experiments: { running: (ExperimentView & { verdict: string; reasons: string[]; readyAt: string | null })[]; recentlyConcluded: ExperimentView[] };
   /** What the current audience size can show: effects smaller than `minDetectableLift` end inconclusive; a series of rounds shows more. */
-  power: { deliveredPerArm: number; clickRate: number; minDetectableLift: number; roundsFor: { lift: number; rounds: number | null }[] } | null;
+  power: { deliveredPerArm: number; clickRate: number; minDetectableLift: number; roundsFor: { lift: number; rounds: number | null }[]; /** when leads are measured */ leadRate: number | null; leadMinDetectableLift: number | null } | null;
   allowed: { proposeExperiment: { ok: boolean; reason: string | null } };
   notes: string[];
 };
@@ -45,7 +45,7 @@ export function buildSignals(input: {
     const empty: ArmData = { entryId: "", sentAt: null, delivered: 0, clicks: 0, complaints: 0, unsubscribes: 0 };
     const arm = (id: string) => { const v = byEntry.get(id); return v ? armOf(v) : { ...empty, entryId: id }; };
     const rounds = (e.rounds ?? [{ armA: e.armA, armB: e.armB }]).map((r) => ({ a: arm(r.armA), b: arm(r.armB) }));
-    const j: Verdict = judgeSeries(rounds, e.plannedRounds ?? 1, asOf, rails);
+    const j: Verdict = judgeSeries(rounds, e.plannedRounds ?? 1, asOf, rails, (e.metric ?? "click_rate") as "click_rate" | "lead_rate");
     return { ...e, verdict: j.verdict, reasons: j.reasons, readyAt: j.readyAt };
   });
   const incumbent = input.state.incumbentEntryId ? byEntry.get(input.state.incumbentEntryId) : undefined;
@@ -73,7 +73,9 @@ export function buildSignals(input: {
       const n = window.length ? Math.round(pooled.delivered / window.length) : 0;
       const rate = pooled.delivered > 0 ? pooled.clicks / pooled.delivered : 0;
       const mde = minDetectableLift(rate, n);
-      return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde, roundsFor: [0.2, 0.3, 0.5].map((lift) => ({ lift, rounds: roundsNeeded(rate, n, lift) })) };
+      const leadsKnown = window.length > 0 && window.every((w) => w.leads !== undefined);
+      const leadRate = leadsKnown && pooled.delivered > 0 ? window.reduce((t, w) => t + (w.leads ?? 0), 0) / pooled.delivered : null;
+      return mde === null ? null : { deliveredPerArm: n, clickRate: rate, minDetectableLift: mde, roundsFor: [0.2, 0.3, 0.5].map((lift) => ({ lift, rounds: roundsNeeded(rate, n, lift) })), leadRate, leadMinDetectableLift: leadRate ? minDetectableLift(leadRate, n) : null };
     })(),
     allowed: { proposeExperiment: canPropose({ ...input.state, running: running.length }, asOf, rails) },
     notes,

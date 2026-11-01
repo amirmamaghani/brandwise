@@ -4,6 +4,7 @@
 // shortcut: the Bot API has no idempotency key, so a crash between "sent" and "recorded" can post twice; fine for a first channel,
 // move to a sent-marker table before high-volume use. Photos up to 10 MB and videos up to 50 MB (Bot API upload limits).
 import type { Connector } from "./publish.ts";
+import { campaignSlug, tagText, withUtm } from "./email/domain/render.ts";
 
 const CAPTION_MAX = 1024;
 const TEXT_MAX = 4096;
@@ -28,7 +29,9 @@ export function telegram(opts: { token: string; fetchImpl?: typeof fetch }): Con
     async publish({ entry, asset, target }) {
       const chatId = target?.chatId;
       if (!chatId) throw new Error("No chatId in the campaign's telegram target");
-      const text = [entry.body.trim(), entry.link ?? ""].filter(Boolean).join("\n\n");
+      // links carry the entry (utm_content), so a visit or a lead from the post is traced back to it (docs/analytics.md D6)
+      const utm = { entryId: entry.id, campaign: campaignSlug(entry.campaignName), medium: "messenger", source: "telegram" };
+      const text = [tagText(entry.body.trim(), utm), entry.link ? withUtm(entry.link, utm) : ""].filter(Boolean).join("\n\n");
       if (text === "" && !asset) throw new Error("Entry has no text and no creative to post");
       let sent;
       if (asset && (asset.kind === "image" || asset.kind === "video")) {

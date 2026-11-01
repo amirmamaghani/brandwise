@@ -1,6 +1,6 @@
 # Analytics: learnings, experiments, economics, paid media
 
-Status 2026-11-01: phases 1 to 3 are built (code in `packages/core/src/learnings/`, `regulator/` and `economics/`, each with pure and database tests); phases 4 and 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
+Status 2026-11-01: phases 1 to 4 are built (code in `packages/core/src/learnings/`, `regulator/`, `economics/` and `conversions/`, each with pure and database tests); phase 5 is planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
 
 Principles stay: nothing leaves without the calendar and approval; code judges, agents read aggregates; agents get tools, never credentials; providers are adapters with contract tests; Postgres is the source of truth.
 
@@ -90,6 +90,14 @@ As built:
 - **Loop**: `lead_rate` as a guardrail on every e-mail test, primary when power allows. The simulator `sim-shop` sets the proxy trap: urgency raises clicks and lowers leads.
 
 Done when: a signed lead with `utm_content` is attributed to its entry once, even if sent twice; a later qualification updates CPQL; a clickbait subject that wins on clicks is rejected on leads.
+
+As built:
+- A source is added by a person (Results > Leads): a signed webhook (`POST /api/v1/plugins/brandwise/http/webhooks/conversions?source=<id>`, header `X-BrandWise-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, t + "." + body)>`, five minutes of tolerance; the secret is shown once and stored sealed with the plugin's key) or a CSV import with a column mapping. Body: `{ "kind": "lead" | "order", "id", "status", "occurredAt", "email" | "phone", "value", "currency", "utm": { "utm_content": ... }, "bw", "promo", "selfReport" }`, or an array of them.
+- The recipient-hash salt moved to Postgres (`installation`); an install keeps its earlier KV salt. A customer's e-mail gets the same salted hash as the e-mail recipient, phones a salted hash of their digits; `raw` drops every field that looks personal.
+- `tools/bw-snippet.js` keeps the first and last touch of a visitor and fills hidden form fields (`bw`, `bw_utm_last`, `bw_utm_first`); optional.
+- The lead rules in the rails, when a source measures the brand: arms are judged 72 h after sending; a challenger with significantly fewer leads (exact conditional binomial, p < 0.05, at least 3 control leads) is unsafe; a click win whose leads are 10 % or more lower is not adopted even before that is significant (the safe default keeps the control). A lead experiment (`--metric lead_rate`) decides on leads with the exact test. In simulation, a "free gift" subject with +129 % clicks and 12 leads against 18 was kept out, and learned as a finding about leads.
+- Funnel numbers are ranges (last click .. promo codes and self-reports); ROMI is not computed: on attributed revenue it would count sales that happen anyway, and incremental profit needs a holdout (later).
+- The simulated shop turns simulated clicks into leads with a hidden model in which bait brings clicks and few leads.
 
 ## Phase 5. Paid media: ad buys and boosts (L)
 

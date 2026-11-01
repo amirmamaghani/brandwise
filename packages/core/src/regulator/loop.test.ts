@@ -12,6 +12,7 @@ import { expectedRates } from "../email/adapters/sim-model.ts";
 import { createEmail } from "../email/index.ts";
 import { createRegulator } from "./index.ts";
 import { judge } from "./rails.ts";
+import { createConversions } from "../conversions/index.ts";
 import { regulatorStore } from "./store.ts";
 
 const run = process.env.DATABASE_URL && process.env.S3_BUCKET ? test : test.skip;
@@ -234,6 +235,53 @@ run("a series pools its rounds: no verdict before the last one, a pooled win whe
     const [a5, b5] = await pair(5);
     await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "A small tweak of the greeting", lever: "greeting: hi -> hello", armA: a5.id, armB: b5.id, createdBy: "t", expectedLift: 0.2, rounds: 1 }), /needs \d+ rounds|not testable/);
     await assert.rejects(reg.experiments.propose({ campaignId: base.id, hypothesis: "A small tweak of the greeting", lever: "greeting: hi -> hello", armA: a5.id, armB: b5.id, createdBy: "t", expectedLift: 0.05 }), /below the 10 %/);
+  } finally {
+    await cleanup();
+  }
+});
+
+run("the proxy trap: bait that wins on clicks is rejected on leads, once the leads have arrived", async (t) => {
+  const prefix = `test-${Date.now()}-bait`;
+  const { core, reg: plain, base, cleanup } = await setup(prefix);
+  try {
+    const conversions = createConversions({ core, salt: "loop-test", now: () => plain.clock.now() });
+    const email = createEmail({ pool: core.pool, salt: "loop-test", sim: { now: () => plain.clock.now(), onSent: async (s) => { await conversions.simShop(s); } } });
+    const reg = createRegulator({ core, email, conversions });
+    const arm = async (tag: string) => {
+      const c = await core.campaigns.add({ name: `${prefix}-arm-${tag}`, kind: "campaign", parentId: base.id });
+      await core.channels.set(c.id, "email", { provider: "sim", from: "Test <test@example.com>", audienceSize: "8000", seed: `bait-${tag}` });
+      return c;
+    };
+    const [armA, armB] = [await arm("A"), await arm("B")];
+    const send = async (c: { id: string }, subject: string) => {
+      const entry = await core.calendar.add({ campaignId: c.id, title: subject, channel: "email", scheduledAt: new Date((await reg.clock.now()).getTime() - 60_000).toISOString(), tier: 1, body: BODY });
+      assert.equal((await runDue(core, [email.connector()], 5, [c.id])).find((o) => o.id === entry.id)?.result, "published");
+      return entry;
+    };
+    const control = "Our October newsletter", bait = "A free gift inside your October newsletter";
+    assert.ok(expectedRates(bait, BODY).click > 2 * expectedRates(control, BODY).click && expectedRates(bait, BODY).lead < 0.6 * expectedRates(control, BODY).lead, "the world: more clicks, fewer leads");
+    const a = await send(armA, control), b = await send(armB, bait);
+    const exp = await reg.experiments.propose({ campaignId: base.id, hypothesis: "A gift in the subject lifts clicks", lever: "subject_style: plain -> bait", armA: a.id, armB: b.id, createdBy: "t", expectedLift: 0.5 });
+
+    await reg.clock.advance(25 * HOUR);
+    const early = await reg.experiments.evaluate(exp.id);
+    assert.equal(early.verdict, "wait", "clicks are mature, leads are not");
+    assert.ok(early.reasons.some((r) => /leads are still coming/.test(r)), early.reasons.join(" "));
+    const now = await reg.clock.now();
+    const stat = async (id: string) => { const s = await email.stats({ entryId: id, asOf: now.toISOString() }); return { entryId: id, sentAt: s.sends[0]!.sentAt, delivered: s.counts.delivered, clicks: s.counts.clicked.unique, complaints: s.counts.complained, unsubscribes: s.counts.unsubscribed }; };
+    assert.equal(judge(await stat(a.id), await stat(b.id), now, reg.rails).verdict, "B", "on clicks alone the bait would win");
+
+    await reg.clock.advance(48 * HOUR);
+    const done = await reg.experiments.evaluate(exp.id);
+    t.diagnostic(`${done.verdict}: ${done.reasons.join(" ")}; leads A ${await conversions.leadsFor(a.id, await reg.clock.now())}, B ${await conversions.leadsFor(b.id, await reg.clock.now())}`);
+    assert.equal(done.verdict, "A", done.reasons.join(" "));
+    assert.match(done.reasons[0], /fewer leads/);
+    const learned = (await reg.learnings.list(base.id)).find((l) => l.experimentId === exp.id)!;
+    assert.ok(["unsafe", "worse"].includes(learned.result ?? ""), "and the brand learns it");
+    assert.equal(learned.metric, "lead_rate", "as a finding about leads");
+    assert.match(learned.statement, /leads .* although \+\d+ % clicks/);
+    const f = await conversions.funnel(base.id, { sinceDays: 30 });
+    assert.ok(f.measured && f.leads.low > 0);
   } finally {
     await cleanup();
   }

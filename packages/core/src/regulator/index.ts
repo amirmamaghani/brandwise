@@ -5,7 +5,7 @@ import type { createEmail } from "../email/index.ts";
 import type { Library } from "../email/templates/library.ts";
 import { createLearnings, emailMeasure, type Learnings } from "../learnings/index.ts";
 import { parseLever, type Lever } from "../learnings/domain.ts";
-import { DEFAULT_RAILS, canPropose, judgeSeries, type ArmData, type Rails, type Round } from "./rails.ts";
+import { DEFAULT_RAILS, canPropose, judgeSeries, type ArmData, type PrimaryMetric, type Rails, type Round } from "./rails.ts";
 import { minDetectableLift, roundsNeeded } from "./stats.ts";
 import { GOAL_METRICS, armOf, buildSignals, type Goal, type GoalMetric, type SendView } from "./signals.ts";
 import { regulatorStore, type ExperimentRow } from "./store.ts";
@@ -17,7 +17,7 @@ const measuredOf = (metrics: { id: string; available: boolean }[]) => ({
   unsubscribes: metrics.find((m) => m.id === "unsubscribe_rate")?.available !== false,
 });
 
-export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null; /** Where verdicts become learnings; one is made on the development clock when not given. */ learnings?: Learnings }) {
+export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null; /** Where verdicts become learnings; one is made on the development clock when not given. */ learnings?: Learnings; /** Leads traced to an entry (null: not measured); arms then carry leads, and the lead guard applies. */ conversions?: { leadsFor(entryId: string, asOf: Date): Promise<number | null> } }) {
   const { core, email } = deps;
   const rails: Rails = { ...DEFAULT_RAILS, ...deps.rails, guards: { ...DEFAULT_RAILS.guards, ...deps.rails?.guards } };
   const store = regulatorStore(core.pool);
@@ -32,12 +32,13 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
   const learnings = deps.learnings ?? createLearnings({ core, now: () => clock.now(), measure: emailMeasure(email, rails.matureAfterHours) });
 
   /** A concluded experiment becomes an E1 learning: the verdict, the effect with its interval, and what the test could show. */
-  async function learn(e: ExperimentRow, verdict: string, reasons: string[], stats: { rateA: number; rateB: number; lift: number | null; p: number } | null, a: ArmData, b: ArmData, at: string) {
+  async function learn(e: ExperimentRow, verdict: string, reasons: string[], stats: { rateA: number; rateB: number; lift: number | null; p: number } | null, a: ArmData, b: ArmData, at: string, leads?: { a: number; b: number; lift: number | null } | null) {
     const n = Math.min(a.delivered, b.delivered);
+    const k = (x: ArmData) => (e.metric === "lead_rate" ? x.leads ?? 0 : x.clicks);
     return learnings.fromExperiment({
       id: e.id, campaignId: e.campaignId, hypothesis: e.hypothesis, lever: e.lever, metric: e.metric, verdict, reasons, stats,
-      arms: [{ delivered: a.delivered, clicks: a.clicks }, { delivered: b.delivered, clicks: b.clicks }],
-      mde: a.delivered > 0 ? minDetectableLift(a.clicks / a.delivered, n) : null, decidedAt: at, rounds: e.rounds.length,
+      arms: [{ delivered: a.delivered, clicks: k(a) }, { delivered: b.delivered, clicks: k(b) }],
+      mde: a.delivered > 0 ? minDetectableLift(k(a) / a.delivered, n) : null, decidedAt: at, rounds: e.rounds.length, leads: leads ?? null,
     });
   }
 
@@ -48,13 +49,14 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
     for (const c of campaigns) {
       for (const send of await email.store.sends({ campaignId: c.id })) {
         const s = await email.stats({ entryId: send.entryId, asOf: asOf.toISOString() });
-        views.push({ entryId: send.entryId, title: (await core.calendar.get(send.entryId))?.title ?? send.entryId, campaignId: c.id, sentAt: send.sentAt && Date.parse(send.sentAt) <= asOf.getTime() ? send.sentAt : null, counts: s.counts, measured: measuredOf(s.metrics) });
+        const leads = deps.conversions ? await deps.conversions.leadsFor(send.entryId, asOf) : null;
+        views.push({ entryId: send.entryId, title: (await core.calendar.get(send.entryId))?.title ?? send.entryId, campaignId: c.id, sentAt: send.sentAt && Date.parse(send.sentAt) <= asOf.getTime() ? send.sentAt : null, counts: s.counts, measured: measuredOf(s.metrics), leads: leads ?? undefined });
       }
     }
     return views;
   }
 
-  const view = (e: ExperimentRow) => ({ id: e.id, hypothesis: e.hypothesis, armA: e.armA, armB: e.armB, status: e.status, verdict: e.verdict, createdAt: e.createdAt, concludedAt: e.concludedAt, rounds: e.rounds, plannedRounds: e.plannedRounds });
+  const view = (e: ExperimentRow) => ({ id: e.id, hypothesis: e.hypothesis, armA: e.armA, armB: e.armB, status: e.status, verdict: e.verdict, createdAt: e.createdAt, concludedAt: e.concludedAt, rounds: e.rounds, plannedRounds: e.plannedRounds, metric: e.metric });
 
   async function signals(campaignId: string, asOf?: string) {
     const at = await asOfDate(asOf);
@@ -65,10 +67,11 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
   async function armData(entryId: string, at: Date) {
     const s = await email.stats({ entryId, asOf: at.toISOString() });
     const sentAt = s.sends[0]?.sentAt ?? null;
-    return armOf({ entryId, title: "", campaignId: "", sentAt: sentAt && Date.parse(sentAt) <= at.getTime() ? sentAt : null, counts: s.counts, measured: s.sends.length ? measuredOf(s.metrics) : undefined });
+    const leads = deps.conversions ? await deps.conversions.leadsFor(entryId, at) : null;
+    return armOf({ entryId, title: "", campaignId: "", sentAt: sentAt && Date.parse(sentAt) <= at.getTime() ? sentAt : null, counts: s.counts, measured: s.sends.length ? measuredOf(s.metrics) : undefined, leads: leads ?? undefined });
   }
   const roundData = async (e: ExperimentRow, at: Date): Promise<Round[]> => Promise.all(e.rounds.map(async (r) => ({ a: await armData(r.armA, at), b: await armData(r.armB, at) })));
-  const pooled = (arms: ArmData[]): ArmData => ({ ...arms[0], delivered: arms.reduce((t, a) => t + a.delivered, 0), clicks: arms.reduce((t, a) => t + a.clicks, 0), complaints: arms.reduce((t, a) => t + a.complaints, 0), unsubscribes: arms.reduce((t, a) => t + a.unsubscribes, 0) });
+  const pooled = (arms: ArmData[]): ArmData => ({ ...arms[0], delivered: arms.reduce((t, a) => t + a.delivered, 0), clicks: arms.reduce((t, a) => t + a.clicks, 0), complaints: arms.reduce((t, a) => t + a.complaints, 0), unsubscribes: arms.reduce((t, a) => t + a.unsubscribes, 0), leads: arms.every((a) => a.leads !== undefined) ? arms.reduce((t, a) => t + a.leads!, 0) : undefined });
 
   /** Which e-mail entry may be an arm: e-mail, under the campaign, in no experiment yet. */
   async function armEntry(campaignId: string, id: string, used: Set<string>) {
@@ -104,7 +107,7 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
        * Start an A/B experiment between two calendar entries. It names its lever, the one variable it changes ("subject_style: plain ->
        * number"). The rails decide whether it may start, and a lever that already showed no difference at this size is refused.
        */
-      async propose(input: { campaignId: string; hypothesis: string; lever: string | Lever; armA: string; armB: string; createdBy: string; /** The lift the editor expects (0.3 = +30 %); checked against what the planned sample can show. */ expectedLift?: number; /** Rounds of the series (1 = a single A/B). */ rounds?: number }): Promise<ExperimentRow> {
+      async propose(input: { campaignId: string; hypothesis: string; lever: string | Lever; armA: string; armB: string; createdBy: string; /** The lift the editor expects (0.3 = +30 %); checked against what the planned sample can show. */ expectedLift?: number; /** Rounds of the series (1 = a single A/B). */ rounds?: number; /** What decides: clicks (default) or leads (needs a conversion source and a large audience). */ metric?: PrimaryMetric }): Promise<ExperimentRow> {
         const at = await clock.now();
         if (input.hypothesis.trim().length < 10) throw new Error("Write the hypothesis: what you change and what you expect (at least a sentence)");
         const lever = typeof input.lever === "string" ? parseLever(input.lever) : input.lever;
@@ -125,19 +128,22 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!Number.isInteger(rounds) || rounds < 1 || rounds > 20) throw new Error("Rounds are 1 to 20");
         const expected = input.expectedLift ?? null;
         if (expected !== null && !(expected >= rails.minRelativeLift)) throw new Error(`Cannot start an experiment: an expected lift of ${Math.round(100 * expected)} % is below the ${Math.round(100 * rails.minRelativeLift)} % a win needs to be adopted; test a bigger change`);
+        const metric = input.metric ?? "click_rate";
+        if (metric !== "click_rate" && metric !== "lead_rate") throw new Error("The metric is click_rate or lead_rate");
+        if (metric === "lead_rate" && (!deps.conversions || (await deps.conversions.leadsFor(a.id, at)) === null)) throw new Error("Cannot start a lead experiment: no conversion source measures this brand's leads");
         const power = (await signals(input.campaignId)).power;
-        const perArm = power?.deliveredPerArm ?? null, rate = power?.clickRate ?? null;
+        const perArm = power?.deliveredPerArm ?? null, rate = metric === "lead_rate" ? power?.leadRate ?? null : power?.clickRate ?? null;
         const mde = perArm && rate ? minDetectableLift(rate, perArm * rounds) : null;
         if (expected !== null && perArm && rate) {
           if (mde === null || mde > expected) {
             const need = roundsNeeded(rate, perArm, expected);
-            throw new Error(`Cannot start an experiment: with about ${perArm} delivered per arm and round at a ${(100 * rate).toFixed(1)} % click rate, ${rounds} round(s) can only show a lift of ${mde === null ? "more than double" : `${Math.round(100 * mde)} %`}; your expected ${Math.round(100 * expected)} % ${need === null ? "is not testable within 20 rounds: change something bigger" : `needs ${need} rounds (--rounds ${need})`}`);
+            throw new Error(`Cannot start an experiment: with about ${perArm} delivered per arm and round at a ${(100 * rate).toFixed(metric === "lead_rate" ? 2 : 1)} % ${metric === "lead_rate" ? "lead" : "click"} rate, ${rounds} round(s) can only show a lift of ${mde === null ? "more than double" : `${Math.round(100 * mde)} %`}; your expected ${Math.round(100 * expected)} % ${need === null ? "is not testable within 20 rounds: change something bigger" : `needs ${need} rounds (--rounds ${need})`}`);
           }
         }
         const gate = await learnings.retestGate(input.campaignId, lever, perArm ? perArm * rounds : null);
         if (!gate.ok) throw new Error(`Cannot start an experiment: ${gate.reason}`);
         return store.insertExperiment({
-          campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), lever, metric: "click_rate", armA: a.id, armB: b.id, createdBy: input.createdBy,
+          campaignId: input.campaignId, hypothesis: input.hypothesis.trim(), lever, metric, armA: a.id, armB: b.id, createdBy: input.createdBy,
           expectedLift: expected, plannedRounds: rounds, plannedPerArm: perArm, mde, guardrails: rails.guards,
           decisionRule: { method: "frequentist", alpha: rails.significance, minRelativeLift: rails.minRelativeLift, test: rounds > 1 ? "cochran-mantel-haenszel" : "two-proportion z" },
         });
@@ -172,14 +178,14 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         const at = await asOfDate(asOf);
         const rounds = await roundData(e, at);
         const [armA, armB] = [pooled(rounds.map((r) => r.a)), pooled(rounds.map((r) => r.b))];
-        const j = judgeSeries(rounds, e.plannedRounds, at, rails);
+        const j = judgeSeries(rounds, e.plannedRounds, at, rails, e.metric as PrimaryMetric);
         if (j.verdict === "wait" || j.verdict === "next_round") return { experiment: e, verdict: j.verdict, reasons: j.reasons, readyAt: j.readyAt, final: false };
         await store.conclude(id, j.verdict, { reasons: j.reasons, stats: j.stats, asOf: at.toISOString() }, at.toISOString());
         const st = await store.state(e.campaignId);
         if (j.verdict === "B") await store.patchState(e.campaignId, { incumbentEntryId: e.armB, lastAdoptedAt: at.toISOString() });
         else if (j.verdict === "A" && st.incumbentEntryId === null) await store.patchState(e.campaignId, { incumbentEntryId: e.armA });
         else if (j.verdict === "freeze") await store.patchState(e.campaignId, { frozen: true, frozenReason: j.reasons.join("; ") });
-        await learn(e, j.verdict, j.reasons, j.stats, armA, armB, at.toISOString());
+        await learn(e, j.verdict, j.reasons, j.stats, armA, armB, at.toISOString(), j.leads);
         await store.journalWrite(e.campaignId, "learning", "regulator", `Experiment ${id} "${e.hypothesis}": ${j.verdict === "B" ? "the challenger (B) won and is now the incumbent" : j.verdict === "A" ? "the control (A) stays" : j.verdict === "freeze" ? "FROZEN" : "inconclusive, nothing changes"}. ${j.reasons.join(" ")}`, { experiment: id, verdict: j.verdict, stats: j.stats });
         return { experiment: (await store.experiment(id))!, verdict: j.verdict, reasons: j.reasons, readyAt: null, final: true };
       },

@@ -122,3 +122,19 @@ test("guards: the 0.3 % ceiling, complaints clearly above 0.1 %, a significantly
   const early = judgeSeries([{ a: arm(), b: arm({ clicks: 90, complaints: 8 }) }], 4, at(48), R);
   assert.equal(early.verdict, "A", "a broken guard stops a series at once");
 });
+
+test("leads: a click win must bring leads; significantly fewer is unsafe; leads wait longer; a lead experiment decides on leads", () => {
+  const T = at(80);
+  const withLeads = (over: Partial<ArmData>) => arm({ delivered: 8000, clicks: 280, ...over });
+  const fewer = judge(withLeads({ leads: 25 }), withLeads({ clicks: 600, leads: 8 }), T, R);
+  assert.deepEqual([fewer.verdict, /B is unsafe: significantly fewer leads/.test(fewer.reasons[0])], ["A", true]);
+  const lower = judge(withLeads({ leads: 18 }), withLeads({ clicks: 600, leads: 12 }), T, R);
+  assert.deepEqual([lower.verdict, /not adopted: it wins on clicks .* fewer leads/.test(lower.reasons[0])], ["A", true], "not significant yet, but the safe default wins");
+  assert.equal(judge(withLeads({ leads: 18 }), withLeads({ clicks: 600, leads: 19 }), T, R).verdict, "B", "a click win that keeps its leads is adopted");
+  assert.equal(judge(withLeads({}), withLeads({ clicks: 600 }), T, R).verdict, "B", "without a conversion source only clicks count");
+  assert.ok(judge(withLeads({}), withLeads({ clicks: 600 }), T, R).reasons.some((r) => /leads are not measured/.test(r)));
+  assert.equal(judge(withLeads({ leads: 18 }), withLeads({ clicks: 600, leads: 19 }), at(30), R).verdict, "wait", "leads arrive for days: 72 h");
+  const onLeads = judgeSeries([{ a: withLeads({ leads: 20 }), b: withLeads({ clicks: 200, leads: 48 }) }], 1, T, R, "lead_rate");
+  assert.deepEqual([onLeads.verdict, /on leads/.test(onLeads.reasons[0])], ["B", true], "fewer clicks, more leads: B on a lead experiment");
+  assert.equal(judgeSeries([{ a: arm(), b: arm() }], 1, T, R, "lead_rate").verdict, "inconclusive", "a lead experiment without leads cannot be judged");
+});

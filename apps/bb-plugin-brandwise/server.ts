@@ -23,6 +23,7 @@ import { createEditorCli } from "./editor.ts";
 import { createLearnings, emailMeasure } from "./core/learnings/index.ts";
 import { createLearningsCli } from "./learnings-cli.ts";
 import { createEconomics } from "./core/economics/index.ts";
+import { createConversions } from "./core/conversions/index.ts";
 import { createResultsCli } from "./results-cli.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
@@ -152,6 +153,12 @@ export const rpcContract = defineRpcContract({
   /** Costs, creative economics per format, production, and the brand's economics profile (Results page). */
   results_costs: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ report: z.any() }) },
   economics_get: { input: z.object({ campaignId: z.string() }), output: z.object({ economics: z.any() }) },
+  results_funnel: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ funnel: z.any() }) },
+  conversion_sources: { input: z.object({ campaignId: z.string() }), output: z.object({ sources: z.array(z.object({ id: z.string(), name: z.string(), adapter: z.string(), received: z.number(), createdAt: z.string() })) }) },
+  /** A person's actions: add a lead source (the signing secret is shown once), import a CSV export, map a promo code to a campaign. */
+  conversion_source_add: { input: z.object({ campaignId: z.string(), name: z.string().trim().min(1).max(120), adapter: z.enum(["generic", "csv"]) }), output: z.object({ id: z.string(), secret: z.string().nullable(), path: z.string() }) },
+  conversion_import: { input: z.object({ sourceId: z.string(), csv: z.string().max(5_000_000), mapping: z.record(z.string(), z.string()), kind: z.enum(["lead", "order"]) }), output: z.object({ result: z.any() }) },
+  promo_set: { input: z.object({ code: z.string().trim().min(2).max(40), campaignId: z.string() }), output: z.object({ ok: z.boolean() }) },
   /** A person's actions: set the economics profile, state a cost (media spend, an incentive, a tool, sales cost). */
   economics_set: { input: z.object({ campaignId: z.string(), profile: z.record(z.string(), z.unknown()) }), output: z.object({ ok: z.boolean() }) },
   cost_add: { input: z.object({ campaignId: z.string(), kind: z.enum(["media", "incentive", "tool", "sales"]), amount: z.number().min(0), ref: z.string().trim().min(1).max(120), note: z.string().max(500).optional(), entryId: z.string().nullable().optional() }), output: z.object({ ok: z.boolean() }) },
@@ -319,24 +326,37 @@ export default async function plugin(bb: BbPluginApi) {
     return core;
   };
   // E-mail: providers with credentials, events in, statistics out (core/email). The salt makes the stored recipient hashes ours alone.
-  const emailSalt = (await bb.storage.kv.get<string>("email_salt")) ?? (await (async () => { const s = randomUUID(); await bb.storage.kv.set("email_salt", s); return s; })());
+  // The salt lives in Postgres with the data it protects (docs/analytics.md D6): losing bb KV must not change every recipient hash.
+  // An install from before keeps its KV salt, copied over once.
+  const emailSalt = await (async () => {
+    const kv = await bb.storage.kv.get<string>("email_salt");
+    if (core === null) return kv ?? (await (async () => { const s = randomUUID(); await bb.storage.kv.set("email_salt", s); return s; })());
+    const row = (await core.pool.query("select value from installation where key = 'email.salt'").catch(() => ({ rows: [] as { value: string }[] }))).rows[0];
+    if (row) return row.value;
+    const s = kv ?? randomUUID();
+    await core.pool.query("insert into installation (key, value) values ('email.salt', $1) on conflict (key) do nothing", [s]).catch(() => {});
+    return (await core.pool.query("select value from installation where key = 'email.salt'").catch(() => ({ rows: [{ value: s }] }))).rows[0]?.value ?? s;
+  })();
+  const devClock = async () => new Date(Date.now() + (core ? await regulatorStore(core.pool).clockOffset() : 0) * 1000);
+  // Leads and orders (phase 4): signed webhooks and CSV imports; the simulated shop turns simulated clicks into leads.
+  const conversions = core === null ? null : createConversions({ core, salt: emailSalt, secretKey: cfg.secretKey || undefined, now: devClock });
   const email = core === null ? null : createEmail({
     pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
-    sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
+    sim: cfg.simEnabled ? { now: devClock, onSent: async (s) => { await conversions?.simShop(s); } } : undefined,
   });
   // Learnings (docs/analytics.md): verdicts and patterns as structured rows, the brief agents read before writing. On the development clock.
-  const devNow = async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000);
-  const learnings = core === null ? null : createLearnings({ core, now: devNow, measure: email ? emailMeasure(email) : undefined });
+  const learnings = core === null ? null : createLearnings({ core, now: devClock, measure: email ? emailMeasure(email) : undefined });
   const learningsCli = createLearningsCli({ core: need, learnings: () => learnings });
   // Costs and the brand's economics: the generation ledger, review minutes, e-mail sends, the profile a person sets.
   const economicsService = core === null ? null : createEconomics({
-    core, now: async () => new Date(),
+    core, now: async () => new Date(), conversions: conversions ?? undefined,
     unitPrice: async (provider, campaignId) => { const r = await core!.settings.resolve(campaignId, `${provider}.unitPrice`).catch(() => null); return typeof r?.value === "number" ? r.value : null; },
   });
   const economics = () => { if (!economicsService) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return economicsService; };
-  const resultsCli = createResultsCli({ core: need, economics });
+  const conv = () => { if (!conversions) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return conversions; };
+  const resultsCli = createResultsCli({ core: need, economics, conversions: () => conversions });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined }) : null;
+  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined, conversions: conversions ?? undefined }) : null;
   const editorCli = createEditorCli({
     core: need, regulator: () => regulator,
     autorun: {
@@ -362,6 +382,21 @@ export default async function plugin(bb: BbPluginApi) {
       }
     }, { auth: "none" });
   }
+
+  // Conversion sources sign their calls (generic format, docs/analytics.md phase 4), so the route needs no bb login; ?source=<id>.
+  bb.http.route("POST", "/webhooks/conversions", async (ctx) => {
+    const json = (status: number, v: unknown) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    if (!conversions) return json(503, { error: "not configured" });
+    const source = new URL(ctx.req.raw.url).searchParams.get("source") ?? "";
+    const headers: Record<string, string> = {};
+    ctx.req.raw.headers.forEach((value, key) => { headers[key] = value; });
+    try {
+      const r = await conversions.webhook(source, { headers, body: await ctx.req.text() });
+      return r.ok ? json(200, r.result) : json(r.status, { error: r.status === 401 ? "bad signature" : "unknown source" });
+    } catch (cause) {
+      return json(400, { error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, { auth: "none" });
 
   const changed = async () => {
     const entries = await need().calendar.list();
@@ -632,6 +667,14 @@ export default async function plugin(bb: BbPluginApi) {
       return { report: { costs: await e.costs(campaignId, { sinceDays }), formats: await e.formats(campaignId, { sinceDays: Math.max(sinceDays, 90) }), production: await e.production(campaignId, { sinceDays: Math.max(sinceDays, 90) }) } };
     },
     economics_get: async ({ campaignId }) => ({ economics: await economics().economics(campaignId) }),
+    results_funnel: async ({ campaignId, sinceDays }) => ({ funnel: await economics().funnel(campaignId, { sinceDays }) }),
+    conversion_sources: async ({ campaignId }) => ({ sources: (await conv().sources.list(campaignId)).map((s) => ({ id: s.id, name: s.name, adapter: s.adapter, received: s.received, createdAt: s.createdAt })) }),
+    conversion_source_add: async ({ campaignId, name, adapter }) => {
+      const r = await conv().sources.create({ campaignId, name, adapter, createdBy: "ui" });
+      return { id: r.source.id, secret: r.secret, path: `/api/v1/plugins/brandwise/http/webhooks/conversions?source=${r.source.id}` };
+    },
+    conversion_import: async ({ sourceId, csv, mapping, kind }) => ({ result: await conv().importCsv(sourceId, csv, mapping, { kind }) }),
+    promo_set: async ({ code, campaignId }) => { await conv().promo(code, campaignId); return { ok: true }; },
     economics_set: async ({ campaignId, profile }) => { await economics().profile.set(campaignId, profile, "ui"); return { ok: true }; },
     cost_add: async ({ campaignId, kind, amount, ref, note, entryId }) => { await economics().addCost({ campaignId, kind, amount, ref, note, entryId: entryId ?? null, createdBy: "ui" }); return { ok: true }; },
     learning_set_status: async ({ id, action }) => {
@@ -836,12 +879,14 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
     "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
     "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
+    "  bb brandwise results funnel [--campaign <c>] [--since 30d]   (leads, qualified, won, orders and revenue as attribution ranges; CPL, CPQL, CAC and MER next to the profile's ceilings)",
+    "  bb brandwise results sources [--campaign <c>]   (the brand's lead sources and how much each received; adding one and importing are a person's, on the Results page)",
     "  bb brandwise results costs|formats|production|economics [--campaign <c>] [--since 30d]   (read-only: what the campaign cost at the brand's prices, cost per approved asset per format, first-pass approval and send-back reasons, the profile's ceilings; setting the profile and stating costs is a person's, on the Results page)",
     "  bb brandwise learnings mine [--campaign <c>]   (E2 patterns over matured entries; run weekly by a bb automation, silent when nothing is new)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
-    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" --expected-lift <0.3> [--rounds n] | add-round <id> --a <entry> --b <entry> | evaluate <id> | backfill   (A/B on e-mail, registered before the first send; the rails judge, nobody can overrule; an untestable lift or a lever with a standing null result is refused)",
+    "  bb brandwise editor experiments list | propose --a <entry> --b <entry> --hypothesis \"...\" --lever \"attribute: from -> to\" --expected-lift <0.3> [--rounds n] [--metric click_rate|lead_rate] | add-round <id> --a <entry> --b <entry> | evaluate <id> | backfill   (A/B on e-mail, registered before the first send; the rails judge, nobody can overrule; an untestable lift or a lever with a standing null result is refused)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
     "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] [--brief-id <id>] [--applies <ids>] [--tests <id>] | complete <id> [--result '<json>']",
     "  bb brandwise editor autorun   (run by a bb automation: starts the editor or the author only on campaigns with editor.autoRun and only when they have work; silent otherwise)",
@@ -879,7 +924,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since", "--metric"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));

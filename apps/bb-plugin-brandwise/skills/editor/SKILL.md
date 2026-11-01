@@ -64,5 +64,6 @@ The author hands in only the slot to change; both arms are built from the same p
 ## Reading the numbers
 
 - Click rate (unique clicks / delivered) is the measure. Opens are indicative only.
+- When the brand measures leads (signals say so), clicks are a proxy: a challenger that wins on clicks but brings fewer leads is kept out by the rails, and arms are judged 72 h after sending because leads come later. With a large enough audience you may decide on leads directly: `--metric lead_rate` (the Power line says what it can show).
 - Every rate shown has a sample size and an interval: a gap inside the interval is noise.
 - Experiments judge only data that is 24 hours old. Time passing is part of the loop; being patient is correct.

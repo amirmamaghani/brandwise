@@ -68,6 +68,8 @@ When you add the entry, pass `--brief-id <id> --applies <learning ids>` and, in 
 | `bb brandwise results formats [--campaign <c>]` | Creative economics per format: everything generated (rejected and failed included) over the assets that made it into an approved entry. |
 | `bb brandwise results production [--campaign <c>]` | First-pass approval, send-backs per entry, time to approval, send-back reasons. |
 | `bb brandwise results economics [--campaign <c>]` | The economics profile and its ceilings (break-even ROAS, value per lead, CPL max), with what is missing. |
+| `bb brandwise results funnel [--campaign <c>] [--since 30d]` | Leads, qualified, won, orders and revenue as ranges (last click .. with promo codes and self-reports), CPL, CPQL, CAC and MER next to the ceilings. Decide on the range, never on one end of it. Without a lead source leads are unknown, not zero. |
+| `bb brandwise results sources [--campaign <c>]` | The brand's lead sources and how many leads each received. |
 
 A fully loaded cost per lead of a single organic creative is not a metric (too few leads per creative); compare formats and attributes over many entries. Setting the economics profile and stating costs (media spend, invoices) is a person's, on the Results page; generation spend is recorded by the system.
 
@@ -88,7 +90,7 @@ Approved entries are published automatically when their time comes (a bb automat
 
 ## E-mail campaigns
 
-Channel `email`. The entry's **title is the subject**, **body is the e-mail** (plain text becomes paragraphs; start it with `<` to write HTML; an unsubscribe link is always added), **link** gets UTM parameters. When the entry is approved and its time comes it is created as a campaign at the provider and sent to the campaign's audience: nobody can send without approval, and you never choose the audience. The audience and sender are the campaign's email target, set by a human (`bb brandwise campaign channel set email provider=resend segmentId=<id> from="Name <news@domain>"`); without it the entry waits as "Publish by hand". Claims in finance e-mail (returns, "risk-free", leverage) must be checked by the client: write nothing that is not in the client's claims, and use tier 3 for such e-mail.
+Channel `email`. The entry's **title is the subject**, **body is the e-mail** (plain text becomes paragraphs; start it with `<` to write HTML; an unsubscribe link is always added), **link** and every link in the body get UTM parameters (`utm_content` is the entry id, so a lead from the e-mail is traced to it; Telegram posts too). When the entry is approved and its time comes it is created as a campaign at the provider and sent to the campaign's audience: nobody can send without approval, and you never choose the audience. The audience and sender are the campaign's email target, set by a human (`bb brandwise campaign channel set email provider=resend segmentId=<id> from="Name <news@domain>"`); without it the entry waits as "Publish by hand". Claims in finance e-mail (returns, "risk-free", leverage) must be checked by the client: write nothing that is not in the client's claims, and use tier 3 for such e-mail.
 
 Results: `bb brandwise email stats <entry-id>` (or `--campaign <c>`): delivered, bounces, complaints, opens, clicks, click rate. What the results taught is in `bb brandwise brief`, not in single sends. Same numbers whichever provider sent it; a metric the provider cannot report shows "n/a", never 0. Opens are indicative only (privacy proxies inflate them): judge by clicks.
 

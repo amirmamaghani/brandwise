@@ -127,10 +127,21 @@ export function createLearnings(deps: { core: Core; now: () => Promise<Date>; me
   return {
     store,
     /** Called by the regulator when an experiment is concluded: the verdict becomes an E1 learning (idempotent per experiment). */
-    async fromExperiment(e: { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; verdict: string; reasons: string[]; stats: { rateA: number; rateB: number; lift: number | null; p: number } | null; arms: { delivered: number; clicks: number }[]; mde: number | null; decidedAt: string; rounds?: number }) {
+    async fromExperiment(e: { id: string; campaignId: string; hypothesis: string; lever: Lever | null; metric: string; verdict: string; reasons: string[]; stats: { rateA: number; rateB: number; lift: number | null; p: number } | null; arms: { delivered: number; clicks: number }[]; mde: number | null; decidedAt: string; rounds?: number; /** leads of the arms when measured */ leads?: { a: number; b: number; lift: number | null } | null }) {
       const { campaign } = await family(e.campaignId);
       const [a, b] = e.arms;
       const unsafeB = e.verdict === "A" && e.reasons.some((r) => r.startsWith("B is unsafe"));
+      // a click win that lost leads is a finding about leads: say so, not "+129 % clicks, keep the old one"
+      if (e.verdict === "A" && e.leads && /fewer leads/.test(e.reasons[0] ?? "")) {
+        const result: Result = unsafeB ? "unsafe" : "worse";
+        return record({
+          campaignId: e.campaignId, scope: scopeOf(campaign), kind: "performance", evidence: "E1", result,
+          statement: `${e.lever ? `${e.lever.attribute} "${e.lever.from}" -> "${e.lever.to}"` : "the challenger"}: ${e.leads.lift === null ? "fewer" : `${Math.round(100 * e.leads.lift)} %`} leads (${e.leads.b} against ${e.leads.a})${e.stats?.lift ? ` although ${e.stats.lift > 0 ? "+" : ""}${Math.round(100 * e.stats.lift)} % clicks` : ""}: clicks were the wrong proxy here`,
+          channel: "email", lever: e.lever, metric: "lead_rate", effect: e.leads.lift, nPerArm: e.arms.length ? Math.min(...e.arms.map((x) => x.delivered)) : null,
+          method: "A/B on clicks with a lead guard, exact conditional binomial", context: { hypothesis: e.hypothesis, verdict: e.verdict, reasons: e.reasons, clickLift: e.stats?.lift ?? null, leads: e.leads },
+          experimentId: e.id, createdBy: "regulator", decidedAt: e.decidedAt,
+        });
+      }
       const result: Result = e.verdict === "B" ? "better" : e.verdict === "freeze" || unsafeB ? "unsafe" : e.verdict === "A" ? "worse" : "no_difference";
       const ci = a && b && a.delivered > 0 && b.delivered > 0 && a.clicks > 0 ? (() => {
         const pA = a.clicks / a.delivered, pB = b.clicks / b.delivered, se = Math.sqrt((pA * (1 - pA)) / a.delivered + (pB * (1 - pB)) / b.delivered);

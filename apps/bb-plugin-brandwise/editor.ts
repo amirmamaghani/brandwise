@@ -39,6 +39,7 @@ export function fmtSignals(s: Signals): string {
   for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
   for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
   if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
+  if (s.power?.leadRate != null) lines.push("", `Leads are measured: ${pct(s.power.leadRate, 2)} of delivered. A click win has to bring leads (the rails keep the control otherwise); a lead experiment (--metric lead_rate) can only show ${s.power.leadMinDetectableLift === null ? "very large effects" : `about ${pct(s.power.leadMinDetectableLift, 0)} or more per send`}.`);
   if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, one send can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive. A series of rounds shows less: ${s.power.roundsFor.map((r) => `+${Math.round(100 * r.lift)} % needs ${r.rounds ?? "more than 20"} round(s)`).join(", ")}.`);
   const p = s.allowed.proposeExperiment;
   lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
@@ -87,7 +88,8 @@ export function createEditorCli(deps: { core: () => Core; regulator: () => Regul
         if (!lever) return { exitCode: 1, stderr: 'Name the one thing the experiment changes: --lever "attribute: from -> to", e.g. --lever "subject_style: plain -> number"' };
         if (!expected || !Number.isFinite(Number(expected))) return { exitCode: 1, stderr: "Register what you expect before the first send: --expected-lift 0.3 (+30 %). Code checks it against what the audience can show and says how many --rounds it needs." };
         const rounds = Number(val(args, "--rounds") ?? 1);
-        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who, expectedLift: Number(expected), rounds });
+        const metric = val(args, "--metric") as "click_rate" | "lead_rate" | undefined;
+        const e = await reg.experiments.propose({ campaignId: b.id, armA, armB, hypothesis, lever, createdBy: who, expectedLift: Number(expected), rounds, metric });
         return reply(e, `Experiment ${e.id} registered and started: A ${e.armA} (control) against B ${e.armB} (challenger), lever ${e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : "?"}, expected ${pct(e.expectedLift, 0)}, ${e.plannedRounds} round(s)${e.mde !== null ? `, can show ${pct(e.mde, 0)} or more` : ""}. The arms mature 24 h after sending; judge it with: editor experiments evaluate ${e.id}${e.plannedRounds > 1 ? `; after each mature round write the next pair and add it with: editor experiments add-round ${e.id} --a <control entry> --b <challenger entry>` : ""}`);
       }
       if (sub === "add-round") {

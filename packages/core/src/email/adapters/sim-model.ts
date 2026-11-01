@@ -4,11 +4,14 @@
 //
 // Built-in traps on purpose: urgency and ALL CAPS raise opens but also complaints (Goodhart: a goal on opens or clicks alone would
 // reward clickbait that damages the list), and a content-independent share of opens comes from privacy proxies (machine opens).
+// The proxy trap (docs/analytics.md, phase 4): bait ("free gift", "secret", "you won't believe") raises clicks, is safe on complaints,
+// and brings far fewer leads, because the click was curiosity, not interest. Only leads can catch it.
 import { createHash } from "node:crypto";
 
-export type Features = { length: number; question: boolean; number: boolean; personal: boolean; urgency: boolean; caps: boolean; exclamations: number; emoji: number; links: number; shortBody: boolean; ctaAction: boolean; list: boolean };
+export type Features = { length: number; question: boolean; number: boolean; personal: boolean; urgency: boolean; caps: boolean; bait: boolean; exclamations: number; emoji: number; links: number; shortBody: boolean; ctaAction: boolean; list: boolean };
 
 const URGENCY = /\b(last chance|hurry|today only|urgent|don'?t miss|ends tonight|final hours|act now)\b/i;
+const BAIT = /\b(free gift|secret|you won'?t believe|shocking|mystery|surprise inside)\b/i;
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
 export function features(subject: string, body: string): Features {
@@ -19,6 +22,7 @@ export function features(subject: string, body: string): Features {
     personal: /\{\{\s*\w+\s*\}\}/.test(subject),
     urgency: URGENCY.test(subject),
     caps: /\b[A-Z]{4,}\b/.test(subject),
+    bait: BAIT.test(subject),
     exclamations: (subject.match(/!/g) ?? []).length,
     emoji: (subject.match(/\p{Extended_Pictographic}/gu) ?? []).length,
     links: (body.match(/https?:\/\//g) ?? []).length,
@@ -33,13 +37,17 @@ export function features(subject: string, body: string): Features {
 export function expectedRates(subject: string, body: string) {
   const f = features(subject, body);
   const openLogit = -1.2 + (f.personal ? 0.35 : 0) + (f.question ? 0.3 : 0) + (f.number ? 0.25 : 0) + (f.urgency ? 0.5 : 0)
-    - (f.caps ? 0.25 : 0) - (f.exclamations > 1 ? 0.15 : 0) + (f.emoji === 1 ? 0.15 : 0) - 0.012 * Math.abs(f.length - 42);
+    - (f.caps ? 0.25 : 0) - (f.exclamations > 1 ? 0.15 : 0) + (f.emoji === 1 ? 0.15 : 0) + (f.bait ? 0.4 : 0) - 0.012 * Math.abs(f.length - 42);
   const open = sigmoid(openLogit);
-  const clickGivenOpen = sigmoid(-2.2 + (f.links >= 1 ? 0.5 : 0) + (f.number ? 0.15 : 0) + (f.shortBody ? 0.2 : 0) + (f.ctaAction ? 0.3 : 0) + (f.list ? 0.1 : 0) - (f.urgency ? 0.2 : 0));
+  const clickGivenOpen = sigmoid(-2.2 + (f.links >= 1 ? 0.5 : 0) + (f.number ? 0.15 : 0) + (f.shortBody ? 0.2 : 0) + (f.ctaAction ? 0.3 : 0) + (f.list ? 0.1 : 0) - (f.urgency ? 0.2 : 0) + (f.bait ? 0.35 : 0));
+  // a lead after the click: a concrete offer and an action on the button help, bait and urgency bring the wrong people
+  const leadGivenClick = sigmoid(-2.3 + (f.number ? 0.3 : 0) + (f.ctaAction ? 0.2 : 0) - (f.bait ? 1.6 : 0) - (f.urgency ? 0.5 : 0));
   return {
     open,
     clickGivenOpen,
     click: open * clickGivenOpen,                                        // unique clicks per delivered recipient: the metric the loop is judged on
+    leadGivenClick,
+    lead: open * clickGivenOpen * leadGivenClick,                        // leads per delivered recipient (sim-shop)
     complaint: 0.0004 + (f.urgency ? 0.006 : 0) + (f.caps ? 0.002 : 0),   // per delivered
     unsubscribe: 0.002 + (f.urgency ? 0.004 : 0),                         // per delivered
     machineOpen: 0.2,                                                     // per delivered, content-independent

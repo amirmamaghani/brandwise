@@ -258,7 +258,96 @@ function EconomicsTab({ campaigns }: { campaigns: Campaign[] }) {
   );
 }
 
-const TABS = [{ id: "learnings", title: "Learnings" }, { id: "costs", title: "Costs" }, { id: "economics", title: "Economics" }] as const;
+const range = (r: { low: number; high: number } | undefined) => (!r ? "n/a" : r.low === r.high ? String(r.low) : `${r.low}..${r.high}`);
+const perRange = (x: { best: number | null; worst: number | null } | undefined, cur?: string | null) => (!x || (x.best === null && x.worst === null) ? "n/a" : `${money(x.best, null)}..${money(x.worst, cur)}`);
+
+/** Leads and orders: the funnel as attribution ranges with cost per result, and the brand's lead sources (a person adds and imports). */
+function LeadsTab({ campaigns }: { campaigns: Campaign[] }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const { current, picker, scope } = useBrand(campaigns);
+  const [campaignId, setCampaignId] = useState("");
+  const [days, setDays] = useState(30);
+  const [funnel, setFunnel] = useState<any>(null);
+  const [sources, setSources] = useState<{ id: string; name: string; adapter: string; received: number }[]>([]);
+  const [created, setCreated] = useState<{ id: string; secret: string | null; path: string } | null>(null);
+  const [form, setForm] = useState({ name: "", adapter: "generic" as "generic" | "csv", promo: "", csv: "", sourceId: "", mapping: "id=id, status=status, occurredAt=occurredAt, email=email, utm_content=utm_content", kind: "lead" as "lead" | "order" });
+  const [msg, setMsg] = useState<string | null>(null);
+  const target = campaignId && scope.some((c) => c.id === campaignId) ? campaignId : current;
+  const load = useCallback(() => {
+    if (!target) return;
+    rpc.call("results_funnel", { campaignId: target, sinceDays: days }).then((r) => setFunnel(r.funnel), (e) => setMsg(String(e?.message ?? e)));
+    rpc.call("conversion_sources", { campaignId: target }).then((r) => setSources(r.sources), () => {});
+  }, [target, days, rpc]);
+  useEffect(load, [load]);
+  if (!picker) return <p className="text-sm text-muted-foreground">No brand yet.</p>;
+  const act = async (work: () => Promise<unknown>, done: string) => { try { await work(); setMsg(done); load(); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); } };
+  const f = funnel;
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-center gap-2">
+        {picker}
+        <select className={SELECT} value={target} onChange={(e) => setCampaignId(e.target.value)} aria-label="Campaign">
+          {scope.map((x) => <option key={x.id} value={x.id}>{x.kind === "always_on" ? `${x.name} (whole brand)` : x.name}</option>)}
+        </select>
+        <select className={SELECT} value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Window">
+          {[7, 30, 90, 365].map((d) => <option key={d} value={d}>last {d} days</option>)}
+        </select>
+      </div>
+      {f && !f.measured ? <p className="text-sm text-amber-600">No lead source measures this brand yet: leads and CPL are unknown, not zero. Add one below.</p> : null}
+      {f && f.measured ? (
+        <section className="flex flex-col gap-1 text-sm">
+          <h3 className="font-medium">Funnel (attribution range: last click .. with promo codes and self-reports)</h3>
+          <p>Leads {range(f.leads)} · qualified {range(f.qualified)} · won {range(f.won)} · orders {range(f.orders)} · revenue {money(f.revenue?.low, null)}..{money(f.revenue?.high, f.currency)} · {f.unattributed} unattributed</p>
+          <p>CPL {perRange(f.cpl, f.currency)} (max {money(f.cpl?.max, f.currency)}: {f.cpl?.verdict}) · CPQL {perRange(f.cpql, f.currency)} ({f.cpql?.verdict}) · CAC {perRange(f.cac, f.currency)}</p>
+          <p>MER {f.mer?.low?.toFixed(2) ?? "n/a"}..{f.mer?.high?.toFixed(2) ?? "n/a"} (break-even ROAS {f.mer?.breakEven?.toFixed(2) ?? "n/a"}) · contribution {f.contribution ? `${money(f.contribution.low, null)}..${money(f.contribution.high, f.currency)}` : "n/a"}</p>
+          <p className="text-xs text-muted-foreground">ROMI: {f.romi?.needs}</p>
+          {f.needs?.map((n: string) => <p key={n} className="text-xs text-amber-600">Needs: {n}</p>)}
+        </section>
+      ) : null}
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium">Lead sources</h3>
+        {sources.map((s) => <p key={s.id} className="text-sm">{s.name} <span className="text-xs text-muted-foreground">({s.adapter}, {s.received} received, id {s.id})</span></p>)}
+        <div className="flex flex-wrap gap-2">
+          <input className={SELECT} placeholder="Name (site form, CRM...)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label="Source name" />
+          <select className={SELECT} value={form.adapter} onChange={(e) => setForm({ ...form, adapter: e.target.value as "generic" })} aria-label="Adapter">
+            <option value="generic">signed webhook</option><option value="csv">CSV import</option>
+          </select>
+          <Button size="sm" disabled={!form.name.trim()} onClick={() => act(async () => setCreated(await rpc.call("conversion_source_add", { campaignId: target, name: form.name, adapter: form.adapter })), "Source added.")}>Add source</Button>
+        </div>
+        {created ? (
+          <p className="rounded-md border border-dashed border-border p-2 text-xs">
+            POST to <span className="font-mono">{created.path}</span>{created.secret ? <> with the header <span className="font-mono">X-BrandWise-Signature: t=&lt;unix&gt;,v1=&lt;hex HMAC-SHA256(secret, t + "." + body)&gt;</span>. Secret (shown once): <span className="font-mono">{created.secret}</span></> : " (CSV source: import below)"}
+          </p>
+        ) : null}
+      </section>
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium">Import a CSV export</h3>
+        <div className="flex flex-wrap gap-2">
+          <select className={SELECT} value={form.sourceId} onChange={(e) => setForm({ ...form, sourceId: e.target.value })} aria-label="Source">
+            <option value="">Source…</option>
+            {sources.filter((s) => s.adapter !== "sim").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select className={SELECT} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as "lead" })} aria-label="Kind"><option>lead</option><option>order</option></select>
+          <input className={cn(SELECT, "min-w-80 flex-1")} value={form.mapping} onChange={(e) => setForm({ ...form, mapping: e.target.value })} aria-label="Mapping: field=column, ..." />
+        </div>
+        <textarea className="min-h-24 rounded-md border border-input bg-transparent p-2 font-mono text-xs" placeholder="Paste the CSV (first row: headers)" value={form.csv} onChange={(e) => setForm({ ...form, csv: e.target.value })} />
+        <div><Button size="sm" disabled={!form.sourceId || !form.csv.trim()} onClick={() => act(async () => {
+          const mapping = Object.fromEntries(form.mapping.split(",").map((p) => p.split("=").map((x) => x.trim())).filter((p) => p.length === 2 && p[0] && p[1]));
+          const r = await rpc.call("conversion_import", { sourceId: form.sourceId, csv: form.csv, mapping, kind: form.kind });
+          setMsg(`Imported: ${JSON.stringify(r.result)}`);
+        }, "Imported.")}>Import</Button></div>
+      </section>
+      <section className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-medium">Promo code of this campaign</h3>
+        <input className={SELECT} placeholder="SPRING10" value={form.promo} onChange={(e) => setForm({ ...form, promo: e.target.value })} aria-label="Promo code" />
+        <Button size="sm" disabled={form.promo.trim().length < 2} onClick={() => act(() => rpc.call("promo_set", { code: form.promo, campaignId: target }), "Promo code mapped.")}>Map</Button>
+      </section>
+      {msg ? <p className="text-xs text-muted-foreground">{msg}</p> : null}
+    </div>
+  );
+}
+
+const TABS = [{ id: "learnings", title: "Learnings" }, { id: "costs", title: "Costs" }, { id: "leads", title: "Leads" }, { id: "economics", title: "Economics" }] as const;
 
 export function ResultsPage() {
   const rpc = useRpc<typeof rpcContract>();
@@ -277,6 +366,7 @@ export function ResultsPage() {
         </div>
         {tab === "learnings" ? <LearningsTab campaigns={campaigns} /> : null}
         {tab === "costs" ? <CostsTab campaigns={campaigns} /> : null}
+        {tab === "leads" ? <LeadsTab campaigns={campaigns} /> : null}
         {tab === "economics" ? <EconomicsTab campaigns={campaigns} /> : null}
       </div>
     </div>
