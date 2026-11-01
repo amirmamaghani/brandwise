@@ -18,3 +18,6 @@ graphify-out
 tools/satori-spike/out
 __pycache__
 *.pyc
+
+# logos are copied into the site at deploy time (.github/workflows/pages.yml)
+site/images/
