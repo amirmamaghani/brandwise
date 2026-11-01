@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { exactRateTest } from "../regulator/stats.ts";
-import { attributionRange, entryRef, normalizePhone, parseCsv, parseGeneric, sign, stripPersonal, verifySignature } from "./domain.ts";
+import { attributionRange, classifySelfReport, entryRef, keepKnown, normalizePhone, parseCsv, parseGeneric, sign, verifySignature } from "./domain.ts";
 
 test("the webhook signature: right secret and fresh time only", () => {
   const body = '{"kind":"lead","id":"f1","occurredAt":"2026-06-01T10:00:00Z"}';
@@ -15,14 +15,17 @@ test("the webhook signature: right secret and fresh time only", () => {
 });
 
 test("the generic format: checked fields, personal data out of raw, statuses from a closed list", () => {
-  const [e] = parseGeneric(JSON.stringify({ kind: "lead", id: "f1", occurredAt: "2026-06-01T10:00:00Z", email: "Ann@Example.com", name: "Ann", utm: { utm_source: "brandwise", utm_content: "ab12cd34" }, promo: "spring10" }));
+  const [e] = parseGeneric(JSON.stringify({ kind: "lead", id: "f1", occurredAt: "2026-06-01T10:00:00Z", email: "Ann@Example.com", name: "Ann", message: "call me on +420 601 123 456", notes: { who: "Ann Smith" }, utm: { utm_source: "brandwise", utm_content: "ab12cd34", visitor: "Ann" }, promo: "spring10", selfReport: "Ann's newsletter from my friend Bob" }));
   assert.deepEqual([e.status, e.customer?.email, e.utm?.last?.content, e.promoCode], ["new", "Ann@Example.com", "ab12cd34", "SPRING10"]);
-  assert.equal(JSON.stringify(e.raw).includes("Ann"), false, "no e-mail or name kept in raw");
+  assert.equal(JSON.stringify(e.raw).includes("Ann"), false, "no e-mail, name, message or custom field kept in raw");
+  assert.equal(JSON.stringify(e.raw).includes("601"), false);
+  assert.equal(e.selfReport, "email,friend", "a self-report keeps the channels it names, never the text");
+  assert.equal(classifySelfReport("saw it somewhere"), "other");
   assert.throws(() => parseGeneric(JSON.stringify({ kind: "lead", id: "f1", status: "maybe", occurredAt: "2026-06-01T10:00:00Z" })), /status of a lead/);
   assert.throws(() => parseGeneric(JSON.stringify({ kind: "visit", id: "f1", occurredAt: "2026-06-01" })), /kind is/);
   assert.throws(() => parseGeneric("{nope"), /not JSON/);
   assert.equal(normalizePhone(" +420 601-123 456 "), "+420601123456");
-  assert.deepEqual(stripPersonal({ a: 1, customerEmail: "x", nested: { phone: "1", ok: true } }), { a: 1, nested: { ok: true } });
+  assert.deepEqual(keepKnown({ kind: "lead", id: "x", customerEmail: "x", comment: "free text", value: 3, utm: { utm_content: "ab12cd34", other: "y" } }), { kind: "lead", id: "x", value: 3, utm: { utm_content: "ab12cd34" } });
 });
 
 test("CSV export: columns mapped to fields, quotes and semicolons", () => {
@@ -36,9 +39,9 @@ test("attribution is a range: last click only, or with promo codes and self-repo
   const r = attributionRange([
     { entryCampaign: "c1", promoCampaign: null, selfReport: null },          // clicked an e-mail of the campaign
     { entryCampaign: null, promoCampaign: "c1", selfReport: null },          // used the campaign's promo code
-    { entryCampaign: null, promoCampaign: null, selfReport: "your newsletter" },
-    { entryCampaign: "c2", promoCampaign: null, selfReport: "newsletter" },  // another campaign's click wins over a self-report
-    { entryCampaign: null, promoCampaign: null, selfReport: "a friend" },
+    { entryCampaign: null, promoCampaign: null, selfReport: "email" },
+    { entryCampaign: "c2", promoCampaign: null, selfReport: "email" },  // another campaign's click wins over a self-report
+    { entryCampaign: null, promoCampaign: null, selfReport: "friend" },
   ], ids, ["email"]);
   assert.deepEqual(r, { low: 1, high: 3 });
 });

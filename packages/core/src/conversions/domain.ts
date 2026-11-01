@@ -33,12 +33,33 @@ export const normalizeEmail = (e: string) => e.trim().toLowerCase();
 /** Digits with a leading + when there was one; good enough to match the same number written two ways. */
 export const normalizePhone = (p: string) => { const t = p.trim(); return (t.startsWith("+") ? "+" : "") + t.replace(/\D/g, ""); };
 
-/** Keys that hold personal data are dropped from what is kept as `raw`. */
-const PII = /e-?mail|phone|tel|name|address|street|city|zip|postal|ip|birth|card|iban/i;
-export function stripPersonal(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(stripPersonal);
-  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([k]) => !PII.test(k)).map(([k, x]) => [k, stripPersonal(x)]));
-  return v;
+/**
+ * What is kept as `raw`: an allowlist of known fields that hold no personal data, with short scalar values. Everything else a form or a
+ * CRM sends (names, messages, comments, any custom field) is dropped, however it is called.
+ */
+const KEEP = ["kind", "id", "externalId", "status", "occurredAt", "at", "value", "currency", "bw", "promo", "promoCode", "product", "region"];
+const UTM_KEYS = ["source", "medium", "campaign", "content", "utm_source", "utm_medium", "utm_campaign", "utm_content"];
+const scalar = (v: unknown) => (typeof v === "number" || typeof v === "boolean" ? v : typeof v === "string" ? v.slice(0, 120) : undefined);
+export function keepKnown(o: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of KEEP) if (scalar(o[k]) !== undefined) out[k] = scalar(o[k]);
+  const utm = (u: unknown) => (u && typeof u === "object" ? Object.fromEntries(UTM_KEYS.filter((k) => scalar((u as Record<string, unknown>)[k]) !== undefined).map((k) => [k, scalar((u as Record<string, unknown>)[k])])) : undefined);
+  if (o.utm && typeof o.utm === "object") {
+    const u = o.utm as Record<string, unknown>;
+    out.utm = { ...utm(u), ...(u.last ? { last: utm(u.last) } : {}), ...(u.first ? { first: utm(u.first) } : {}) };
+  }
+  return out;
+}
+
+/** "How did you hear about us" is free text a person typed: only the channels it names are kept, never the text. */
+const HEARD: [string, RegExp][] = [
+  ["email", /e-?mail|newsletter|mailing/i], ["telegram", /telegram/i], ["instagram", /instagram|insta\b/i], ["facebook", /facebook|\bfb\b|meta/i],
+  ["tiktok", /tik\s?tok/i], ["youtube", /youtube/i], ["linkedin", /linkedin/i], ["search", /google|search|seznam|bing/i], ["ads", /\bads?\b|advert/i], ["friend", /friend|colleague|recommend/i],
+];
+export function classifySelfReport(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const hits = HEARD.filter(([, re]) => re.test(text)).map(([k]) => k);
+  return hits.length ? hits.join(",") : "other";
 }
 
 const str = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
@@ -71,8 +92,8 @@ export function parseGeneric(body: string): ConversionEvent[] {
     return JSON.parse(JSON.stringify({
       externalId, kind, status, occurredAt: new Date(occurredAt).toISOString(),
       customer: { email: str(o.email ?? (o.customer as Record<string, unknown> | undefined)?.email), phone: str(o.phone ?? (o.customer as Record<string, unknown> | undefined)?.phone) },
-      value, currency: str(o.currency)?.toUpperCase(), utm, bw: str(o.bw), promoCode: str(o.promoCode ?? o.promo)?.toUpperCase(), selfReport: str(o.selfReport ?? o.howDidYouHear),
-      raw: stripPersonal(o),
+      value, currency: str(o.currency)?.toUpperCase(), utm, bw: str(o.bw), promoCode: str(o.promoCode ?? o.promo)?.toUpperCase(), selfReport: classifySelfReport(str(o.selfReport ?? o.howDidYouHear)),
+      raw: keepKnown(o),
     })) as ConversionEvent;
   });
 }
@@ -121,7 +142,8 @@ export type Attributable = { entryCampaign: string | null; promoCampaign: string
  * codes of the campaign and self-reports that name one of its channels. Decide on the range, not on a point.
  */
 export function attributionRange(conversions: Attributable[], campaignIds: Set<string>, channels: string[]): { low: number; high: number } {
-  const said = (t: string | null) => !!t && channels.some((c) => new RegExp(`\\b(${c === "email" ? "e-?mail|newsletter" : c})\\b`, "i").test(t));
+  // self-reports are stored as channel categories (classifySelfReport)
+  const said = (t: string | null) => !!t && channels.some((c) => t.split(",").includes(c));
   let low = 0, high = 0;
   for (const c of conversions) {
     const click = c.entryCampaign !== null && campaignIds.has(c.entryCampaign);
