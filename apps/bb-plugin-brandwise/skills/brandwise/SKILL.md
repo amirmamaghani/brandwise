@@ -60,6 +60,18 @@ When you add the entry, pass `--brief-id <id> --applies <learning ids>` and, in 
 | `bb brandwise learnings add "<observation>" [--lever "attribute: from -> to"] [--campaign <c>]` | Note an observation as E3 (a candidate to test). E1 and E2 are written by code only. |
 | `bb brandwise learnings propose-preference "<rule>" --from-entries <ids>` | Propose a rule drawn from a person's send-backs of those entries; it is in force once the person confirms it. |
 
+## Paid media
+
+Buying ads, boosting a published post and changing a running budget are calendar entries on channel `ads`, always tier 3: a person approves every one, and the money moves only when its time comes.
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise ads order --name "<ad>" --budget <n> --days <n> --at <ISO> [--body "<ad text>"] [--link <url>] [--asset <id>] [--boost <published entry>] [--order <live order> (budget change)] [--campaign <c>]` | Draft an order. Refused at once when it breaks the brand's ads limits (per order, per day, per month); unset limits buy nothing. The limits are checked again right before payment. |
+| `bb brandwise ads list [--campaign <c>]` | Per ad: spend, CTR, CPC, frequency, fatigue, our leads, CPL (fully loaded when production is over 10 % of the spend), ROAS. Platform conversions are the platform's own count: indicative. |
+| `bb brandwise ads pause <entry>` | Stop a live ad (allowed to agents: it only stops spending). |
+
+You never see a payment method, a card or a token, and you never set the limits. Prefer big creative differences over variations, and judge an ad by our leads and their quality, not by its clicks.
+
 ## Results and costs (read-only)
 
 | Command | Effect |

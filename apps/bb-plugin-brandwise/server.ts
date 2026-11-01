@@ -24,6 +24,7 @@ import { createLearnings, emailMeasure } from "./core/learnings/index.ts";
 import { createLearningsCli } from "./learnings-cli.ts";
 import { createEconomics } from "./core/economics/index.ts";
 import { createConversions } from "./core/conversions/index.ts";
+import { createMedia, mockBuyer, mockPayments } from "./core/media/index.ts";
 import { createResultsCli } from "./results-cli.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
@@ -154,6 +155,7 @@ export const rpcContract = defineRpcContract({
   results_costs: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ report: z.any() }) },
   economics_get: { input: z.object({ campaignId: z.string() }), output: z.object({ economics: z.any() }) },
   results_funnel: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ funnel: z.any() }) },
+  ads_results: { input: z.object({ campaignId: z.string() }), output: z.object({ ads: z.array(z.any()) }) },
   conversion_sources: { input: z.object({ campaignId: z.string() }), output: z.object({ sources: z.array(z.object({ id: z.string(), name: z.string(), adapter: z.string(), received: z.number(), createdAt: z.string() })) }) },
   /** A person's actions: add a lead source (the signing secret is shown once), import a CSV export, map a promo code to a campaign. */
   conversion_source_add: { input: z.object({ campaignId: z.string(), name: z.string().trim().min(1).max(120), adapter: z.enum(["generic", "csv"]) }), output: z.object({ id: z.string(), secret: z.string().nullable(), path: z.string() }) },
@@ -169,6 +171,7 @@ export const rpcContract = defineRpcContract({
       briefId: z.string().nullable(), slot: z.string().nullable(),
       applied: z.array(z.object({ id: z.string(), mode: z.string(), statement: z.string(), evidence: z.string().nullable() })),
       attributes: z.record(z.string(), z.object({ value: z.string(), source: z.string() })),
+      media: z.object({ action: z.string(), budget: z.number(), currency: z.string(), days: z.number(), status: z.string(), platform: z.string().nullable(), boostOf: z.string().nullable() }).nullable(),
       experiment: z.object({ id: z.string(), hypothesis: z.string(), lever: z.string().nullable(), variant: z.string().nullable(), round: z.number(), plannedRounds: z.number(), expectedLift: z.number().nullable(), mde: z.number().nullable(), status: z.string(), verdict: z.string().nullable() }).nullable(),
     }),
   },
@@ -354,6 +357,15 @@ export default async function plugin(bb: BbPluginApi) {
   });
   const economics = () => { if (!economicsService) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return economicsService; };
   const conv = () => { if (!conversions) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return conversions; };
+  // Paid media (phase 5). Real platforms and ACP payments are adapters still to write; the mock pair comes with the simulated provider.
+  const num = async (campaignId: string, key: string) => { const r = await core!.settings.resolve(campaignId, key).catch(() => null); return typeof r?.value === "number" && r.value > 0 ? r.value : null; };
+  const media = core === null || economicsService === null ? null : createMedia({
+    core, economics: economicsService, conversions: conversions ?? undefined,
+    buyers: cfg.simEnabled ? [mockBuyer({ now: async () => new Date() })] : [], payments: cfg.simEnabled ? [mockPayments()] : [],
+    limits: async (campaignId) => ({ maxPerOrder: await num(campaignId, "ads.maxPerOrder"), dailyLimit: await num(campaignId, "ads.dailyLimit"), monthlyLimit: await num(campaignId, "ads.monthlyLimit"), currency: (await economicsService.profile.get(campaignId))?.profile.currency ?? null }),
+    now: async () => new Date(),
+  });
+  const ads = () => { if (!media) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return media; };
   const resultsCli = createResultsCli({ core: need, economics, conversions: () => conversions });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
   const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined, conversions: conversions ?? undefined }) : null;
@@ -367,7 +379,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
-  const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
+  const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : []), ...(media ? [media.connector()] : [])];
   for (const p of email?.providers ?? []) {
     if (!p.events) continue;
     // the provider signs each call, so the route needs no bb login (a signature failure stores nothing)
@@ -653,8 +665,10 @@ export default async function plugin(bb: BbPluginApi) {
       const info = await learnings.forEntry(id);
       const entry = await need().calendar.get(id);
       const e = entry?.experimentId && regulator ? await regulator.store.experiment(entry.experimentId) : null;
+      const mo = entry?.channel === "ads" && media ? await media.order(id) : null;
       return {
         ...info,
+        media: mo ? { action: mo.action, budget: mo.budget, currency: mo.currency, days: mo.days, status: mo.status, platform: mo.platform, boostOf: mo.boostOf } : null,
         experiment: e ? { id: e.id, hypothesis: e.hypothesis, lever: e.lever ? `${e.lever.attribute}: ${e.lever.from} -> ${e.lever.to}` : null, variant: entry!.variant, round: (e.rounds.find((r) => r.armA === id || r.armB === id)?.round) ?? 1, plannedRounds: e.plannedRounds, expectedLift: e.expectedLift, mde: e.mde, status: e.status, verdict: e.verdict } : null,
       };
     },
@@ -668,6 +682,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     economics_get: async ({ campaignId }) => ({ economics: await economics().economics(campaignId) }),
     results_funnel: async ({ campaignId, sinceDays }) => ({ funnel: await economics().funnel(campaignId, { sinceDays }) }),
+    ads_results: async ({ campaignId }) => ({ ads: await ads().results(campaignId) }),
     conversion_sources: async ({ campaignId }) => ({ sources: (await conv().sources.list(campaignId)).map((s) => ({ id: s.id, name: s.name, adapter: s.adapter, received: s.received, createdAt: s.createdAt })) }),
     conversion_source_add: async ({ campaignId, name, adapter }) => {
       const r = await conv().sources.create({ campaignId, name, adapter, createdBy: "ui" });
@@ -879,6 +894,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
     "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
     "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
+    "  bb brandwise ads order --name \"...\" --budget <n> --days <n> --at <ISO> [--body \"<ad text>\"] [--link <url>] [--asset <id>] [--boost <published entry>] [--order <live order entry> (budget change)] [--currency EUR] [--campaign <c>]   (a tier-3 entry a person approves; refused at once over the ads limits, checked again before payment)",
+    "  bb brandwise ads list [--campaign <c>] | pause <entry> | pull   (per ad: spend, CTR, CPC, frequency, fatigue, CPL and ROAS on our leads; pull is run hourly by a bb automation)",
     "  bb brandwise results funnel [--campaign <c>] [--since 30d]   (leads, qualified, won, orders and revenue as attribution ranges; CPL, CPQL, CAC and MER next to the profile's ceilings)",
     "  bb brandwise results sources [--campaign <c>]   (the brand's lead sources and how much each received; adding one and importing are a person's, on the Results page)",
     "  bb brandwise results costs|formats|production|economics [--campaign <c>] [--since 30d]   (read-only: what the campaign cost at the brand's prices, cost per approved asset per format, first-pass approval and send-back reasons, the profile's ceilings; setting the profile and stating costs is a person's, on the Results page)",
@@ -924,7 +941,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since", "--metric"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since", "--metric", "--budget", "--days", "--boost", "--order", "--currency"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -1254,6 +1271,25 @@ export default async function plugin(bb: BbPluginApi) {
         }
         if (area === "brief") return learningsCli.brief(args, { val, positional, reply, usage });
         if (area === "results") return resultsCli.results(action, args, { val, positional, reply, usage });
+        if (area === "ads") {
+          const m = ads();
+          if (action === "order") { // an agent may draft an order: it is a tier-3 calendar entry a person approves, refused at once over the limits
+            const [name, budget, days, at] = [val(args, "--name"), Number(val(args, "--budget")), Number(val(args, "--days")), val(args, "--at")];
+            if (!name || !at || !(budget > 0) || !(days > 0)) return { exitCode: 1, stderr: usage };
+            const boost = val(args, "--boost"), change = val(args, "--order");
+            const r = await m.create({ campaignId: await campaign(), name, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, assetId: val(args, "--asset") ?? null, action: change ? "budget_change" : boost ? "boost" : "media_buy", budget, currency: val(args, "--currency"), days, boostOf: boost ?? null, orderOf: change ?? null, at, createdBy: cliActor(args) });
+            await changed();
+            return reply(r, `Order ${r.entry.id}: ${r.order.action} ${r.order.budget} ${r.order.currency} over ${r.order.days} day(s), waiting for a person's approval (tier 3). The limits are checked again before anything is paid.`);
+          }
+          if (action === "pause") { if (!rest[0]) return { exitCode: 1, stderr: usage }; await m.pause(rest[0]); return reply({ ok: true }, `Ad ${rest[0]} paused.`); }
+          if (action === "pull") { const r = await m.pull(); return reply(r, r.points > 0 ? `${r.points} number(s) updated over ${r.orders} live order(s)` : ""); }
+          if (action === "list") {
+            const rows = await m.results(await campaign());
+            const f = (v: number | null, d = 2) => (v === null ? "n/a" : v.toFixed(d));
+            return reply(rows, rows.map((a) => `${a.entryId}  ${a.status.padEnd(7)} ${a.action.padEnd(9)} ${a.budget} ${a.currency}/${a.days}d  spend ${f(a.spend)}  CTR ${a.ctr === null ? "n/a" : (100 * a.ctr).toFixed(2) + " %"}  CPC ${f(a.cpc)}  freq ${f(a.frequency, 1)}  leads ${a.leads ?? "n/a"}  CPL ${f(a.cpl)}${a.fullyLoadedCpl !== null ? ` (fully loaded ${f(a.fullyLoadedCpl)})` : ""}  ROAS ${f(a.roas)}${a.fatigue ? "  FATIGUE" : ""}  "${a.name}"`).join("\n") || "No ads.");
+          }
+          return { exitCode: 1, stderr: usage };
+        }
         if (area === "learnings") return learningsCli.learnings(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "add") {
           const file = positional(args.slice(2))[0];

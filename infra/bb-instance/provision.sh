@@ -106,11 +106,13 @@ ensure_automation() { # <name> <cron> <brandwise command> <timeout>
 }
 # The scheduler publishes approved entries whose time has come (every minute).
 # The editor's alarm clock starts the editor or the author only on campaigns with editor.autoRun, and only when code finds work.
-# The miner looks for E2 patterns over matured entries once a week (docs/analytics.md).
+# The miner looks for E2 patterns over matured entries once a week, the ads pull brings platform reports and spend every hour
+# (docs/analytics.md).
 ensure_scheduler() {
   ensure_automation "BrandWise scheduler" "* * * * *" "calendar run-due" 90s
   ensure_automation "BrandWise editor" "0 */6 * * *" "editor autorun" 120s
   ensure_automation "BrandWise learnings" "30 3 * * 1" "learnings mine" 300s
+  ensure_automation "BrandWise ads" "10 * * * *" "ads pull" 120s
 }
 
 tailnet_host() { tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'; }

@@ -347,7 +347,52 @@ function LeadsTab({ campaigns }: { campaigns: Campaign[] }) {
   );
 }
 
-const TABS = [{ id: "learnings", title: "Learnings" }, { id: "costs", title: "Costs" }, { id: "leads", title: "Leads" }, { id: "economics", title: "Economics" }] as const;
+/** Paid media per ad: what the platform reports next to our leads and orders (platform conversions are indicative). */
+function PaidTab({ campaigns }: { campaigns: Campaign[] }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const { current, picker, scope } = useBrand(campaigns);
+  const [campaignId, setCampaignId] = useState("");
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const target = campaignId && scope.some((c) => c.id === campaignId) ? campaignId : current;
+  useEffect(() => { if (target) rpc.call("ads_results", { campaignId: target }).then((r) => { setRows(r.ads); setError(null); }, (e) => setError(String(e?.message ?? e))); }, [target, rpc]);
+  if (!picker) return <p className="text-sm text-muted-foreground">No brand yet.</p>;
+  const n = (v: number | null | undefined, d = 2) => (v === null || v === undefined ? "n/a" : v.toFixed(d));
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {picker}
+        <select className={SELECT} value={target} onChange={(e) => setCampaignId(e.target.value)} aria-label="Campaign">
+          {scope.map((x) => <option key={x.id} value={x.id}>{x.kind === "always_on" ? `${x.name} (whole brand)` : x.name}</option>)}
+        </select>
+      </div>
+      <p className="text-xs text-muted-foreground">Orders are tier-3 calendar entries you approve; the limits under Settings (Paid media) are checked when an order is made and again before payment. Unset limits buy nothing.</p>
+      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {rows === null ? null : rows.length === 0 ? <p className="text-sm text-muted-foreground">No ads yet.</p> : (
+        <table className="text-sm">
+          <thead><tr className="text-left text-xs text-muted-foreground"><th className="pr-3">Ad</th><th className="pr-3">Status</th><th className="pr-3 text-right">Spend</th><th className="pr-3 text-right">CTR</th><th className="pr-3 text-right">CPC</th><th className="pr-3 text-right">Freq.</th><th className="pr-3 text-right">Leads</th><th className="pr-3 text-right">CPL</th><th className="text-right">ROAS</th></tr></thead>
+          <tbody>
+            {rows.map((a) => (
+              <tr key={a.entryId} className="border-b border-border">
+                <td className="py-1 pr-3">{a.name}{a.fatigue ? <span className="ml-1 text-xs text-amber-600">fatigue</span> : null}</td>
+                <td className="pr-3 text-xs">{a.status}</td>
+                <td className="pr-3 text-right tabular-nums">{n(a.spend)} {a.currency}</td>
+                <td className="pr-3 text-right tabular-nums">{a.ctr === null ? "n/a" : `${(100 * a.ctr).toFixed(2)} %`}</td>
+                <td className="pr-3 text-right tabular-nums">{n(a.cpc)}</td>
+                <td className="pr-3 text-right tabular-nums">{n(a.frequency, 1)}</td>
+                <td className="pr-3 text-right tabular-nums">{a.leads ?? "n/a"} <span className="text-xs text-muted-foreground">({a.platformConversions} platform)</span></td>
+                <td className="pr-3 text-right tabular-nums">{n(a.cpl)}{a.fullyLoadedCpl !== null ? <span className="text-xs text-muted-foreground"> / {n(a.fullyLoadedCpl)} loaded</span> : null}</td>
+                <td className="text-right tabular-nums">{n(a.roas)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+const TABS = [{ id: "learnings", title: "Learnings" }, { id: "costs", title: "Costs" }, { id: "leads", title: "Leads" }, { id: "paid", title: "Paid" }, { id: "economics", title: "Economics" }] as const;
 
 export function ResultsPage() {
   const rpc = useRpc<typeof rpcContract>();
@@ -367,6 +412,7 @@ export function ResultsPage() {
         {tab === "learnings" ? <LearningsTab campaigns={campaigns} /> : null}
         {tab === "costs" ? <CostsTab campaigns={campaigns} /> : null}
         {tab === "leads" ? <LeadsTab campaigns={campaigns} /> : null}
+        {tab === "paid" ? <PaidTab campaigns={campaigns} /> : null}
         {tab === "economics" ? <EconomicsTab campaigns={campaigns} /> : null}
       </div>
     </div>

@@ -6,7 +6,7 @@
   "main": "src/index.ts",
   "scripts": {
     "migrate": "node src/migrate.ts",
-    "test": "node --test src/*.test.ts src/email/*.test.ts src/email/templates/*.test.ts src/regulator/*.test.ts src/learnings/*.test.ts src/economics/*.test.ts src/conversions/*.test.ts"
+    "test": "node --test --test-concurrency=1 src/*.test.ts src/email/*.test.ts src/email/templates/*.test.ts src/regulator/*.test.ts src/learnings/*.test.ts src/economics/*.test.ts src/conversions/*.test.ts src/media/*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3",

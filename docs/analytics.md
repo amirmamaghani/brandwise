@@ -1,6 +1,6 @@
 # Analytics: learnings, experiments, economics, paid media
 
-Status 2026-11-01: phases 1 to 4 are built (code in `packages/core/src/learnings/`, `regulator/`, `economics/` and `conversions/`, each with pure and database tests); phase 5 is planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
+Status 2026-11-01: phases 1 to 5 are built (code in `packages/core/src/learnings/`, `regulator/`, `economics/`, `conversions/` and `media/`, each with pure and database tests). Real ad platforms and ACP payments are the adapters still to write; the mock platform and payment come with the simulated provider. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
 
 Principles stay: nothing leaves without the calendar and approval; code judges, agents read aggregates; agents get tools, never credentials; providers are adapters with contract tests; Postgres is the source of truth.
 
@@ -108,6 +108,12 @@ As built:
 - **Tests**: platform split tests; geo and time holdouts later.
 
 Done when (mock buyer): a boost over the limit is refused before payment; an approved boost spends once on retry; its spend is in the ledger and CPL shows per ad; no command prints the payment token.
+
+As built:
+- `bb brandwise ads order` drafts a `media_buy`, `boost` (of a published post) or `budget_change` (of a live order) as a tier-3 entry on channel `ads` with a `media_order`; the core refuses any other tier for that channel and moving entries to or from it. Limits are scoped settings (`ads.maxPerOrder`, `ads.dailyLimit`, `ads.monthlyLimit`, in the profile's currency) and fail closed: unset buys nothing. They are checked when the order is made and again in the connector, before the payment step.
+- The connector authorizes a payment only for platforms that need one (`requiresPayment`, unless the target says `prepaid=true`), per idempotency key, and keeps only the authorization's reference; the token is handed to the platform and dropped. The ad's link gets `utm_medium=paid` and `utm_content=<entry id>`, so our leads are traced to it.
+- `ads pull` (hourly automation) stores the platform's daily numbers in `metric_point` and the spend in the cost ledger, both idempotent per day; a finished order ends. Per ad (`ads list`, Results > Paid): spend, CTR, CPC, CPM, frequency, fatigue (CTR of the last three days under 70 % of the first three), our leads, CPL, CPQL, ROAS on our orders, and the fully loaded CPL when the format's cost per approved asset is over 10 % of the spend.
+- Not built: real platform adapters (Meta Marketing API, Google Ads, Telegram Ads, AdCP sales agents) and a real ACP payment adapter; split tests on the platforms. The ports (`MediaBuyer`, `PaymentProvider`) and the mock pair define what they implement.
 
 ## Results page and digest
 

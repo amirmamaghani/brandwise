@@ -151,6 +151,8 @@ export function createCore(cfg: CoreConfig) {
     },
     async add(input: { campaignId: string; title: string; channel: string; scheduledAt: string; tier: Tier; assetId?: string | null; body?: string; link?: string | null; createdBy?: string }): Promise<CalendarEntry> {
       if (Number.isNaN(Date.parse(input.scheduledAt))) throw new Error(`Invalid date: ${input.scheduledAt}`);
+      // spending money is always a person's deliberate approval (docs/analytics.md, phase 5)
+      if (input.channel === "ads" && input.tier !== 3) throw new Error("Paid media (channel ads) is always tier 3");
       const link = cleanLink(input.link);
       // tier 1 passes automatically, tier 2 and 3 wait for a human (docs/architecture.md)
       const status: Status = input.tier === 1 ? "approved" : "pending_approval";
@@ -223,6 +225,7 @@ export function createCore(cfg: CoreConfig) {
         scheduledAt: patch.scheduledAt === undefined ? entry.scheduledAt : new Date(patch.scheduledAt).toISOString(),
       };
       if (next.title.trim() === "" || next.channel.trim() === "") throw new Error("Title and channel cannot be empty");
+      if ((next.channel === "ads") !== (entry.channel === "ads")) throw new Error("An entry cannot move to or from paid media (channel ads): make a new order");
       if (Number.isNaN(Date.parse(next.scheduledAt))) throw new Error(`Invalid date: ${patch.scheduledAt}`);
       const changed = (["title", "body", "link", "channel", "assetId", "scheduledAt"] as const).filter((k) => next[k] !== entry[k]);
       const contentChanged = changed.some((k) => k !== "scheduledAt");

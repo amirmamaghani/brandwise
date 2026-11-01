@@ -426,7 +426,7 @@ const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "
 /** What the entry was written from: its brief (explore or exploit slot), the learnings it applies or tests, and its tags. */
 function EntryLearnings({ entry }: { entry: CalendarEntry }) {
   const rpc = useRpc<typeof rpcContract>();
-  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }>; experiment: { id: string; hypothesis: string; lever: string | null; variant: string | null; round: number; plannedRounds: number; expectedLift: number | null; mde: number | null; status: string; verdict: string | null } | null } | null>(null);
+  const [info, setInfo] = useState<{ briefId: string | null; slot: string | null; applied: { id: string; mode: string; statement: string; evidence: string | null }[]; attributes: Record<string, { value: string; source: string }>; media: { action: string; budget: number; currency: string; days: number; status: string; platform: string | null; boostOf: string | null } | null; experiment: { id: string; hypothesis: string; lever: string | null; variant: string | null; round: number; plannedRounds: number; expectedLift: number | null; mde: number | null; status: string; verdict: string | null } | null } | null>(null);
   useEffect(() => {
     let live = true;
     rpc.call("entry_learnings", { id: entry.id }).then((r) => live && setInfo(r), () => live && setInfo(null));
@@ -435,6 +435,13 @@ function EntryLearnings({ entry }: { entry: CalendarEntry }) {
   if (info === null) return null;
   const tags = Object.entries(info.attributes).filter(([, a]) => a.source !== "derived");
   const byAgent = entry.createdBy !== "ui";
+  const mo = info.media;
+  const mediaBlock = mo ? (
+    <div className="flex flex-col gap-0.5 rounded-md border border-amber-500/50 p-2 text-xs">
+      <p><span className="font-medium">Paid media: {mo.action.replace("_", " ")}</span>, {mo.budget} {mo.currency} over {mo.days} day(s){mo.boostOf ? `, boosts ${mo.boostOf}` : ""} · {mo.status}{mo.platform ? ` on ${mo.platform}` : ""}</p>
+      <p className="text-muted-foreground">Approving lets the system spend this budget when its time comes. The brand's ads limits are checked again right before payment; the payment itself never passes through an agent.</p>
+    </div>
+  ) : null;
   const exp = info.experiment;
   const experimentBlock = exp ? (
     <div className="flex flex-col gap-0.5 rounded-md border border-border p-2 text-xs">
@@ -444,11 +451,12 @@ function EntryLearnings({ entry }: { entry: CalendarEntry }) {
     </div>
   ) : null;
   if (info.briefId === null && info.applied.length === 0 && tags.length === 0) {
-    if (experimentBlock) return experimentBlock;
+    if (mediaBlock || experimentBlock) return <>{mediaBlock}{experimentBlock}</>;
     return byAgent ? <p className="text-xs text-muted-foreground">No learnings declared: the author did not say which brief it wrote from.</p> : null;
   }
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border p-2 text-sm">
+      {mediaBlock}
       {experimentBlock}
       <p className="text-xs text-muted-foreground">
         Written from brief {info.briefId ?? "none"}{info.slot ? ` · ${info.slot} slot` : ""}
