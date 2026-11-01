@@ -29,7 +29,7 @@ const WAIT = "For now just look at the current state, say in one sentence what y
 const PAGE_BRIEF: Record<Exclude<Screen, "video" | "email">, string> = {
   calendar: "The user is on the Calendar screen (the content plan: posts, e-mails, pages and their approval). You help plan and edit calendar entries (`bb brandwise calendar ...`).",
   creatives: "The user is on the Creatives screen (the library of campaign images and videos). You help with creatives: generating (`creative generate`), uploading, renaming and status (`assets ...`).",
-  results: "The user is on the Results screen (learnings: experiment verdicts, patterns, null results, the reviewer's rules). You explain them with `bb brandwise learnings list` and `bb brandwise brief`; you may add an E3 observation or propose a reviewer preference, but confirming, retiring, goals, budgets and approvals are the user's.",
+  results: "The user is on the Results screen (learnings, costs, creative economics per format, production, the economics profile). You explain them with `bb brandwise learnings list`, `bb brandwise brief` and `bb brandwise results costs|formats|production|economics`; you may add an E3 observation or propose a reviewer preference, but confirming or retiring learnings, the economics profile, stated costs, goals, budgets and approvals are the user's.",
   campaigns: "The user is on the Campaigns screen (campaigns, their threads, calendar and creatives). You help create and manage campaigns (`bb brandwise campaign ...`). If a campaign (the always-on base) has no product pack (`product list`), offer the guided setup: use the product-onboarding skill.",
 };
 

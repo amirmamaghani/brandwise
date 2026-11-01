@@ -1,7 +1,7 @@
 // Calendar page of the BrandWise: a full-surface month/week calendar, and the approval queue as the
 // page's sidebar. The calendar is the only way anything leaves the system (docs/architecture.md), so
 // "what waits for me" stays visible next to it and a decision is one click (tier 2) or a review (tier 3).
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { CalendarEntry, Campaign, Creative, rpcContract } from "./server";
@@ -481,6 +481,9 @@ function EntryDialog({
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
   const [reason, setReason] = useState<string>("");
+  // how long the reviewer had the entry open: the review's cost is counted from it (capped on the server side of the report)
+  const openedAt = useRef<number>(Date.now());
+  const reviewSeconds = () => Math.round((Date.now() - openedAt.current) / 1000);
   const [form, setForm] = useState({ title: "", body: "", link: "", channel: CHANNELS[0], at: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -490,6 +493,7 @@ function EntryDialog({
     setNote("");
     setReason("");
     setError(null);
+    openedAt.current = Date.now();
     if (entry !== null) {
       setForm({ title: entry.title, body: entry.body, link: entry.link ?? "", channel: entry.channel, at: toLocalInput(new Date(entry.scheduledAt)) });
     }
@@ -510,8 +514,8 @@ function EntryDialog({
       setBusy(false);
     }
   };
-  const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision }), closeEntry);
-  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note, reason: reason === "" ? null : (reason as (typeof REVIEW_REASONS)[number]) }), closeEntry);
+  const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision, reviewSeconds: reviewSeconds() }), closeEntry);
+  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note, reason: reason === "" ? null : (reason as (typeof REVIEW_REASONS)[number]), reviewSeconds: reviewSeconds() }), closeEntry);
   const save = () => {
     if (entry === null) return;
     const timeChanged = form.at !== toLocalInput(new Date(entry.scheduledAt));

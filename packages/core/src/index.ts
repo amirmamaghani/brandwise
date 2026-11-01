@@ -168,7 +168,8 @@ export function createCore(cfg: CoreConfig) {
       const rows = await q("select c.*, p.name as campaign_name from content_calendar c join campaign p on p.id = c.campaign_id where c.id = $1", [id]);
       return rows[0] ? entryFrom(rows[0]) : null;
     },
-    async decide(id: string, decision: "approve" | "cancel", actor = "unknown"): Promise<CalendarEntry> {
+    /** `reviewSeconds`: how long the reviewer looked (the approval dialog's timer); the review's cost is counted from it. */
+    async decide(id: string, decision: "approve" | "cancel", actor = "unknown", reviewSeconds: number | null = null): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
@@ -176,7 +177,7 @@ export function createCore(cfg: CoreConfig) {
       const to = decision === "approve" ? "approved" : "cancelled";
       await q(`update content_calendar set status = $2, approved_at = case when $2 = 'approved' then now() else approved_at end,
                  approved_by = case when $2 = 'approved' then $3 else approved_by end where id = $1`, [id, to, actor]);
-      await event(id, to, actor, entry.status, to);
+      await event(id, to, actor, entry.status, to, reviewSeconds === null ? {} : { data: { review_seconds: Math.max(0, Math.round(reviewSeconds)) } });
       return (await calendar.get(id))!;
     },
     /**
@@ -193,7 +194,7 @@ export function createCore(cfg: CoreConfig) {
       return (await calendar.get(id))!;
     },
     /** Send a pending entry back to its author with a note (and, best, a reason from REVIEW_REASONS). Any later edit resubmits it. */
-    async requestChanges(id: string, note: string, opts: { actor?: string; reason?: string | null } = {}): Promise<CalendarEntry> {
+    async requestChanges(id: string, note: string, opts: { actor?: string; reason?: string | null; reviewSeconds?: number | null } = {}): Promise<CalendarEntry> {
       const entry = await calendar.get(id);
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
@@ -201,7 +202,7 @@ export function createCore(cfg: CoreConfig) {
       if (note.trim() === "") throw new Error("Say what should change (note is empty)");
       if (opts.reason && !(REVIEW_REASONS as readonly string[]).includes(opts.reason)) throw new Error(`Unknown reason "${opts.reason}" (use ${REVIEW_REASONS.join(", ")})`);
       await q("update content_calendar set status = 'changes_requested', review_note = $2 where id = $1", [id, note.trim()]);
-      await event(id, "changes_requested", opts.actor ?? "unknown", entry.status, "changes_requested", { note: note.trim(), reason: opts.reason ?? null });
+      await event(id, "changes_requested", opts.actor ?? "unknown", entry.status, "changes_requested", { note: note.trim(), reason: opts.reason ?? null, ...(opts.reviewSeconds == null ? {} : { data: { review_seconds: Math.max(0, Math.round(opts.reviewSeconds)) } }) });
       return (await calendar.get(id))!;
     },
     /**

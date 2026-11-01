@@ -60,6 +60,17 @@ When you add the entry, pass `--brief-id <id> --applies <learning ids>` and, in 
 | `bb brandwise learnings add "<observation>" [--lever "attribute: from -> to"] [--campaign <c>]` | Note an observation as E3 (a candidate to test). E1 and E2 are written by code only. |
 | `bb brandwise learnings propose-preference "<rule>" --from-entries <ids>` | Propose a rule drawn from a person's send-backs of those entries; it is in force once the person confirms it. |
 
+## Results and costs (read-only)
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise results costs [--campaign <c>] [--since 30d]` | What a campaign cost, by kind (generation, media, review minutes, e-mail sends, LLM share, incentives, tools), at the brand's prices; what cannot be priced yet says what it needs. |
+| `bb brandwise results formats [--campaign <c>]` | Creative economics per format: everything generated (rejected and failed included) over the assets that made it into an approved entry. |
+| `bb brandwise results production [--campaign <c>]` | First-pass approval, send-backs per entry, time to approval, send-back reasons. |
+| `bb brandwise results economics [--campaign <c>]` | The economics profile and its ceilings (break-even ROAS, value per lead, CPL max), with what is missing. |
+
+A fully loaded cost per lead of a single organic creative is not a metric (too few leads per creative); compare formats and attributes over many entries. Setting the economics profile and stating costs (media spend, invoices) is a person's, on the Results page; generation spend is recorded by the system.
+
 A single send is not evidence: never cite the result of one entry as a reason. Confirming or retiring a learning (Results page only), goals, budgets and approvals are the user's.
 
 ## Assets

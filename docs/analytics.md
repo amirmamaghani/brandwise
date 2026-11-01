@@ -1,6 +1,6 @@
 # Analytics: learnings, experiments, economics, paid media
 
-Status 2026-11-01: phases 1 and 2 are built (code in `packages/core/src/learnings/` and `packages/core/src/regulator/`, tests in `learnings.test.ts`, `learnings.db.test.ts`, `regulator.test.ts` and `loop.test.ts`); phases 3 to 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
+Status 2026-11-01: phases 1 to 3 are built (code in `packages/core/src/learnings/`, `regulator/` and `economics/`, each with pure and database tests); phases 4 and 5 are planned. For e-mail and paid media this replaces the sketch in `roadmap.md` §6.
 
 Principles stay: nothing leaves without the calendar and approval; code judges, agents read aggregates; agents get tools, never credentials; providers are adapters with contract tests; Postgres is the source of truth.
 
@@ -72,6 +72,14 @@ Done when: a 4-round series of 600 per arm reaches a pooled verdict where every 
   - Fully loaded CPL for a single organic creative is not a metric: too few leads, and in e-mail and Telegram a creative is not an independent unit. Per ad in paid media it is (phase 5).
 
 Done when: a rejected and a failed video generation both count in cost per approved video; budgets behave as before but read the ledger; `results economics` says "needs: margin" until the profile is set.
+
+As built:
+- The ledger keeps units (credits, money) and prices them when a report is made: credits by the setting `<provider>.unitPrice`, review minutes and e-mail sends by the profile valid then. Review minutes and sends are read from `entry_event` and `email_event`, so nothing is allocated by a job and there is no `costs allocate`.
+- Generations are recorded when they start (estimated units) and get their status and asset when collected; a failed job is marked failed. The bb KV counter of earlier versions is still read for the day it was written.
+- The review timer is the time the approval dialog was open, capped at 30 minutes; approvals without it (CLI, the sidebar's quick approve) take the tier's default (0, 3 and 10 minutes, or the profile's).
+- LLM spend is the profile's monthly amount spread over the brand's campaigns by the entries written outside the UI; bb does not expose token usage to the plugin as far as the code shows.
+- Setting the profile and stating costs (media, incentive, tool, sales) are a person's actions on the Results page only; `bb brandwise results ...` is read-only.
+- Not built yet: response per exposure per single creative (only e-mail is measured, and e-mail entries rarely carry a creative); it comes with the channel metrics of phase 5.
 
 ## Phase 4. Leads and CPL (L)
 

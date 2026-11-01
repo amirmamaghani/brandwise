@@ -62,6 +62,7 @@ export const providerById = (id: string): Provider => {
 /** Limits every provider has. Counted in the provider's unit. */
 const budgetFields = (p: Provider): ProviderField[] => [
   { key: "maxPerGeneration", label: `Max ${p.unit} per generation`, description: "Hard ceiling for one image or video. Callers (CLI, MCP) can only ask for less.", type: "number", default: 5 },
+  { key: "unitPrice", label: `Price per ${p.unit.replace(/s$/, "")}`, description: "Money per unit in the brand's currency, for cost reports (cost per approved asset, campaign costs). Empty until known: reports then say what they need.", type: "number" },
   { key: "dailyBudget", label: `Daily budget (${p.unit})`, description: "Generation is refused for the rest of the day once everything under this scope has spent this much. A campaign's budget counts its own spend, the global one counts all.", type: "number", default: 40 },
 ];
 

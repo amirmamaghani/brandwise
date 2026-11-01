@@ -22,6 +22,8 @@ import { regulatorStore } from "./core/regulator/store.ts";
 import { createEditorCli } from "./editor.ts";
 import { createLearnings, emailMeasure } from "./core/learnings/index.ts";
 import { createLearningsCli } from "./learnings-cli.ts";
+import { createEconomics } from "./core/economics/index.ts";
+import { createResultsCli } from "./results-cli.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
 
@@ -146,7 +148,13 @@ export const rpcContract = defineRpcContract({
     output: entrySchema,
   },
   calendar_unapprove: { input: z.object({ id: z.string() }), output: entrySchema },
-  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000), reason: z.enum(REVIEW_REASONS).nullable().optional() }), output: entrySchema },
+  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000), reason: z.enum(REVIEW_REASONS).nullable().optional(), reviewSeconds: z.number().min(0).max(86_400).nullable().optional() }), output: entrySchema },
+  /** Costs, creative economics per format, production, and the brand's economics profile (Results page). */
+  results_costs: { input: z.object({ campaignId: z.string(), sinceDays: z.number().int().min(1).max(730) }), output: z.object({ report: z.any() }) },
+  economics_get: { input: z.object({ campaignId: z.string() }), output: z.object({ economics: z.any() }) },
+  /** A person's actions: set the economics profile, state a cost (media spend, an incentive, a tool, sales cost). */
+  economics_set: { input: z.object({ campaignId: z.string(), profile: z.record(z.string(), z.unknown()) }), output: z.object({ ok: z.boolean() }) },
+  cost_add: { input: z.object({ campaignId: z.string(), kind: z.enum(["media", "incentive", "tool", "sales"]), amount: z.number().min(0), ref: z.string().trim().min(1).max(120), note: z.string().max(500).optional(), entryId: z.string().nullable().optional() }), output: z.object({ ok: z.boolean() }) },
   /** What an entry was written from: its brief, the learnings it applies or tests, its attributes (the approval card). */
   entry_learnings: {
     input: z.object({ id: z.string() }),
@@ -160,7 +168,7 @@ export const rpcContract = defineRpcContract({
   learnings_list: { input: z.object({ campaignId: z.string() }), output: z.object({ learnings: z.array(learningSchema) }) },
   /** A person's actions on a learning: confirm a proposed reviewer preference, or retire a learning. */
   learning_set_status: { input: z.object({ id: z.string(), action: z.enum(["confirm", "retire"]) }), output: z.object({ ok: z.boolean() }) },
-  calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]) }), output: entrySchema },
+  calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]), reviewSeconds: z.number().min(0).max(86_400).nullable().optional() }), output: entrySchema },
   creatives_list: { input: z.null(), output: z.object({ creatives: z.array(creativeSchema) }) },
   creatives_upload: {
     input: z.object({ campaignId: z.string(), filename: z.string().trim().min(1).max(200), dataBase64: z.string().min(1).max(14_000_000) }),
@@ -320,6 +328,13 @@ export default async function plugin(bb: BbPluginApi) {
   const devNow = async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000);
   const learnings = core === null ? null : createLearnings({ core, now: devNow, measure: email ? emailMeasure(email) : undefined });
   const learningsCli = createLearningsCli({ core: need, learnings: () => learnings });
+  // Costs and the brand's economics: the generation ledger, review minutes, e-mail sends, the profile a person sets.
+  const economicsService = core === null ? null : createEconomics({
+    core, now: async () => new Date(),
+    unitPrice: async (provider, campaignId) => { const r = await core!.settings.resolve(campaignId, `${provider}.unitPrice`).catch(() => null); return typeof r?.value === "number" ? r.value : null; },
+  });
+  const economics = () => { if (!economicsService) throw new Error("Not configured: run infra/bb-instance/provision.sh apply"); return economicsService; };
+  const resultsCli = createResultsCli({ core: need, economics });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
   const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library(), learnings: learnings ?? undefined }) : null;
   const editorCli = createEditorCli({
@@ -361,8 +376,12 @@ export default async function plugin(bb: BbPluginApi) {
   // shortcut: the default data dir of this instance; read it from bb when the SDK offers it
   const PROFILES_DIR = px.join(osx.homedir(), ".bb-brandwise", "providers");
   const host = () => ({ profilesDir: PROFILES_DIR, bins: { higgsfield: cfg.higgsfieldBin } });
+  // Spend lives in the cost ledger (Postgres, docs/analytics.md phase 3). The bb KV counter of earlier versions is still read for the
+  // day it was written, so a budget is not reset by an upgrade; nothing writes it any more.
   const spendKey = (provider: string, scope: Scope) => `gen_spend:${today()}:${provider}:${scope ?? "global"}`;
-  const spentAt = async (provider: string, scope: Scope) => (await bb.storage.kv.get<number>(spendKey(provider, scope))) ?? 0;
+  const spentAt = async (provider: string, scope: Scope) => (await economics().spentToday(provider, scope)) + ((await bb.storage.kv.get<number>(spendKey(provider, scope))) ?? 0);
+  /** Image or video, as far as the spec tells before the result exists (the result's own kind replaces it). */
+  const kindOfSpec = (spec: GenSpec) => (spec.startImage || spec.endImage || spec.videoRefs?.length || spec.audioRefs?.length || spec.params?.duration || /video|veo|kling|seedance|sora|wan|hailuo/i.test(spec.model) ? "video" : "image");
   const scopeName = async (c: Core, scope: Scope) => (scope === null ? "global" : ((await c.campaigns.list()).find((x) => x.id === scope)?.name ?? scope));
 
   async function costOf(c: Core, spec: GenSpec, scope: Scope, maxArg?: number) {
@@ -386,7 +405,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const { provider, config } = await c.generation.providerFor(campaign.id, host());
     const job = await provider.start(config, a.spec);
-    for (const scope of await c.settings.chain(campaign.id)) await bb.storage.kv.set(spendKey(provider.id, scope), (await spentAt(provider.id, scope)) + k.credits);
+    await economics().recordGeneration({ campaignId: campaign.id, provider: provider.id, jobId: job.id, units: k.credits, unit: provider.unit, format: `${kindOfSpec(a.spec)}/${a.spec.model}`, createdBy: "generate" });
     await bb.storage.kv.set(`gen_job:${job.id}`, { campaignId: campaign.id, provider: provider.id, role: a.role, name: a.name, spec: a.spec, credits: k.credits, startedAt: new Date().toISOString() });
     return { jobId: job.id, credits: k.credits, provider: provider.id, unit: provider.unit };
   }
@@ -399,7 +418,10 @@ export default async function plugin(bb: BbPluginApi) {
     const deadline = Date.now() + waitSeconds * 1000;
     for (;;) {
       const job = await provider.get(config, jobId);
-      if (isFailed(job.status)) throw new Error(`Generation ${jobId} ended as "${job.status}". ${provider.unit[0].toUpperCase()}${provider.unit.slice(1)} may still have been used.`);
+      if (isFailed(job.status)) {
+        await economics().finishGeneration(provider.id, jobId, { status: "failed" });
+        throw new Error(`Generation ${jobId} ended as "${job.status}". ${provider.unit[0].toUpperCase()}${provider.unit.slice(1)} may still have been used.`);
+      }
       if (job.status === "completed" && job.resultUrl) {
         const ext = /\.(png|jpe?g|webp|gif|mp4|webm)(?:$|\?)/i.exec(new URL(job.resultUrl).pathname + "?")?.[1]?.toLowerCase() ?? "png";
         const asset = await c.assets.save({
@@ -408,6 +430,7 @@ export default async function plugin(bb: BbPluginApi) {
           provenance: { tool: provider.id, model: meta.spec.model, jobId, prompt: meta.spec.prompt, aspect: meta.spec.aspect ?? null, resolution: meta.spec.resolution ?? null, refs: (meta.spec.refs ?? []).map((r) => r.split("/").pop()), creditsEstimated: meta.credits },
         });
         await bb.storage.kv.set(`gen_job:${jobId}`, { ...meta, assetId: asset.id });
+        await economics().finishGeneration(provider.id, jobId, { status: "done", assetId: asset.id, format: `${asset.kind}/${meta.spec.model}` });
         bb.realtime.publish(ASSETS_CHANGED, {});
         return { state: "done" as const, jobId, status: job.status, credits: meta.credits, asset };
       }
@@ -570,8 +593,8 @@ export default async function plugin(bb: BbPluginApi) {
       await changed();
       return entry;
     },
-    calendar_decide: async ({ id, decision }) => {
-      const entry = await need().calendar.decide(id, decision, "ui");
+    calendar_decide: async ({ id, decision, reviewSeconds }) => {
+      const entry = await need().calendar.decide(id, decision, "ui", reviewSeconds ?? null);
       await changed();
       return entry;
     },
@@ -585,8 +608,8 @@ export default async function plugin(bb: BbPluginApi) {
       await changed();
       return entry;
     },
-    calendar_request_changes: async ({ id, note, reason }) => {
-      const entry = await need().calendar.requestChanges(id, note, { actor: "ui", reason: reason ?? null });
+    calendar_request_changes: async ({ id, note, reason, reviewSeconds }) => {
+      const entry = await need().calendar.requestChanges(id, note, { actor: "ui", reason: reason ?? null, reviewSeconds: reviewSeconds ?? null });
       await changed();
       return entry;
     },
@@ -604,6 +627,13 @@ export default async function plugin(bb: BbPluginApi) {
       if (!learnings) throw new Error("Not configured");
       return { learnings: (await learnings.list(campaignId)).map((l) => ({ id: l.id, scope: l.scope, kind: l.kind, evidence: l.evidence, result: l.result, statement: l.statement, channel: l.channel, status: l.status, effectiveStatus: l.effectiveStatus, contrary: l.contrary, createdBy: l.createdBy, confirmedBy: l.confirmedBy, decidedAt: l.decidedAt, sourceIds: l.sourceIds })) };
     },
+    results_costs: async ({ campaignId, sinceDays }) => {
+      const e = economics();
+      return { report: { costs: await e.costs(campaignId, { sinceDays }), formats: await e.formats(campaignId, { sinceDays: Math.max(sinceDays, 90) }), production: await e.production(campaignId, { sinceDays: Math.max(sinceDays, 90) }) } };
+    },
+    economics_get: async ({ campaignId }) => ({ economics: await economics().economics(campaignId) }),
+    economics_set: async ({ campaignId, profile }) => { await economics().profile.set(campaignId, profile, "ui"); return { ok: true }; },
+    cost_add: async ({ campaignId, kind, amount, ref, note, entryId }) => { await economics().addCost({ campaignId, kind, amount, ref, note, entryId: entryId ?? null, createdBy: "ui" }); return { ok: true }; },
     learning_set_status: async ({ id, action }) => {
       if (!learnings) throw new Error("Not configured");
       if (action === "confirm") await learnings.confirm(id, "ui"); else await learnings.retire(id, "ui");
@@ -806,6 +836,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb brandwise learnings list [--campaign <c>] [--status active|needs_retest|proposed|superseded|retired] [--kind performance|null_result|reviewer_preference] [--evidence E1|E2|E3] | show <id>",
     "  bb brandwise learnings add \"<observation>\" [--lever \"attribute: from -> to\"] [--channel <ch>] [--campaign <c>]   (agents: E3 only, a candidate to test)",
     "  bb brandwise learnings propose-preference \"<rule>\" --from-entries <sent-back entry ids> [--campaign <c>]   (a rule drawn from a person's send-backs; in force once a person confirms it)",
+    "  bb brandwise results costs|formats|production|economics [--campaign <c>] [--since 30d]   (read-only: what the campaign cost at the brand's prices, cost per approved asset per format, first-pass approval and send-back reasons, the profile's ceilings; setting the profile and stating costs is a person's, on the Results page)",
     "  bb brandwise learnings mine [--campaign <c>]   (E2 patterns over matured entries; run weekly by a bb automation, silent when nothing is new)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
@@ -848,7 +879,7 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--lever", "--brief-id", "--applies", "--tests", "--tag", "--reason", "--from-entries", "--evidence", "--expected-lift", "--rounds", "--since"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
@@ -1177,6 +1208,7 @@ export default async function plugin(bb: BbPluginApi) {
           return reply(h, h.map((x) => `${x.at.slice(0, 16)}  ${x.kind.padEnd(17)} ${x.actor.padEnd(10)} ${x.fromStatus ?? ""} -> ${x.toStatus ?? ""}${x.reason ? `  [${x.reason}]` : ""}${x.note ? `  ${x.note}` : ""}`).join("\n") || "No history.");
         }
         if (area === "brief") return learningsCli.brief(args, { val, positional, reply, usage });
+        if (area === "results") return resultsCli.results(action, args, { val, positional, reply, usage });
         if (area === "learnings") return learningsCli.learnings(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "add") {
           const file = positional(args.slice(2))[0];
