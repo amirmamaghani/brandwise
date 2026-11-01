@@ -10,6 +10,7 @@ test("spend limits fail closed and count what is already committed", () => {
   assert.match(checkLimits({ budget: 60, days: 2, currency: "EUR" }, L, { perDay: 10, month: 0 }).reason!, /daily limit/);
   assert.match(checkLimits({ budget: 90, days: 9, currency: "EUR" }, L, { perDay: 0, month: 450 }).reason!, /monthly limit/);
   assert.match(checkLimits({ budget: 90, days: 9, currency: "USD" }, L, { perDay: 0, month: 0 }).reason!, /USD/);
+  assert.match(checkLimits({ budget: 90, days: 9, currency: "EUR" }, { ...L, currency: null }, { perDay: 0, month: 0 }).reason!, /no currency/, "no brand currency: nothing is bought");
   assert.equal(checkLimits({ budget: 70, days: 7, currency: "EUR" }, L, { perDay: 10, month: 100 }).ok, true);
 });
 

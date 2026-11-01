@@ -1380,6 +1380,7 @@ export default async function plugin(bb: BbPluginApi) {
           if (!key) return { exitCode: 1, stderr: usage };
           const f = c.settings.fields.find((x) => x.key === key);
           if (!f) return { exitCode: 1, stderr: `Unknown setting ${key}. List them with: bb brandwise config list` };
+          if (f.userOnly) return { exitCode: 1, stderr: `${key} is changed by a person on the Settings page (or the campaign page), never from the command line` };
           if (action === "unset") {
             await c.settings.unset(scope, key);
             bb.realtime.publish(CONFIG_CHANGED, {});

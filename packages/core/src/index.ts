@@ -176,6 +176,8 @@ export function createCore(cfg: CoreConfig) {
       if (!entry) throw new Error(`No calendar entry with id ${id}`);
       assertActionable(entry);
       if (decision === "approve" && entry.status !== "pending_approval") throw new Error(`Entry ${id} is ${entry.status}, only pending_approval can be approved`);
+      // spending money is approved by a person on a page, never through the CLI agents call (docs/analytics.md, phase 5)
+      if (decision === "approve" && entry.channel === "ads" && actor !== "ui") throw new Error("Paid media is approved by a person in the Calendar page, not from the command line");
       const to = decision === "approve" ? "approved" : "cancelled";
       await q(`update content_calendar set status = $2, approved_at = case when $2 = 'approved' then now() else approved_at end,
                  approved_by = case when $2 = 'approved' then $3 else approved_by end where id = $1`, [id, to, actor]);

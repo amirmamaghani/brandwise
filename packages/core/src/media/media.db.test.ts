@@ -42,6 +42,19 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
     await assert.rejects(media.create({ campaignId: child.id, name: "Boost", body: "x", action: "boost", budget: 10, days: 1, boostOf: first.entry.id, at, createdBy: "agent" }), /published post/);
     assert.equal(payments.charges.length, 0, "nothing was paid for refused orders");
 
+    // only a person on a page approves money: not the CLI, and the connector checks who approved before paying
+    await assert.rejects(core.calendar.decide(first.entry.id, "approve", "cli:agent"), /approved by a person in the Calendar page/);
+    const sneaky = await order(20, 2);
+    await core.pool.query("update content_calendar set status = 'approved', approved_by = 'cli', scheduled_at = now() - interval '1 minute' where id = $1", [sneaky.entry.id]);
+    assert.match((await runDue(core, [media.connector()], 5, [child.id])).find((o) => o.id === sneaky.entry.id)!.detail, /not approved by a person/);
+    await core.calendar.decide(sneaky.entry.id, "cancel", "ui").catch(() => core.pool.query("update content_calendar set status = 'cancelled' where id = $1", [sneaky.entry.id]));
+    assert.equal(payments.charges.length, 0);
+    // another brand's post cannot be boosted from here
+    const other = await core.campaigns.add({ name: `${prefix}-other`, kind: "always_on" });
+    const foreign = await core.calendar.add({ campaignId: other.id, title: "Theirs", channel: "telegram", scheduledAt: at, tier: 1, body: "x" });
+    await core.pool.query("update content_calendar set status = 'published' where id = $1", [foreign.id]);
+    await assert.rejects(media.create({ campaignId: child.id, name: "Boost", body: "x", action: "boost", budget: 10, days: 1, boostOf: foreign.id, at, createdBy: "agent" }), /same brand/);
+
     // approved, then the limits are lowered: the connector checks again before any money moves
     await core.calendar.decide(first.entry.id, "approve", "ui", 60);
     limits.maxPerOrder = 50;
@@ -82,6 +95,9 @@ run("paid media: limits before payment, one purchase on retry, spend in the ledg
 
     await media.pause(first.entry.id);
     assert.equal((await media.order(first.entry.id))?.status, "paused");
+    limits.monthlyLimit = 150;
+    await assert.rejects(order(100, 10), /monthly limit/, "a paused order still counts this month: 70 + 100 is over 150");
+    limits.monthlyLimit = 500;
     const tokens = [...buyer.orders.values()].flatMap((o) => o.tokens);
     assert.ok(tokens.length === 1 && tokens[0].startsWith("tok_"));
     const everything = JSON.stringify(outputs) + JSON.stringify((await core.pool.query("select * from media_order where entry_id = $1", [first.entry.id])).rows) + JSON.stringify((await core.pool.query("select * from entry_event where entry_id = $1", [first.entry.id])).rows);

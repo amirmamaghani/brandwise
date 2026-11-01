@@ -30,7 +30,8 @@ export type Limits = { maxPerOrder: number | null; dailyLimit: number | null; mo
  */
 export function checkLimits(o: { budget: number; days: number; currency: string }, l: Limits, committed: { perDay: number; month: number }): { ok: boolean; reason: string | null } {
   if (!l.maxPerOrder || !l.dailyLimit || !l.monthlyLimit) return { ok: false, reason: "no ads limits are set: a person sets ads.maxPerOrder, ads.dailyLimit and ads.monthlyLimit first" };
-  if (l.currency && o.currency !== l.currency) return { ok: false, reason: `the order is in ${o.currency}, the brand's limits in ${l.currency}` };
+  if (!l.currency) return { ok: false, reason: "the brand has no currency: a person sets it in the economics profile, which the limits are counted in" };
+  if (o.currency !== l.currency) return { ok: false, reason: `the order is in ${o.currency}, the brand's limits in ${l.currency}` };
   if (o.budget > l.maxPerOrder) return { ok: false, reason: `the budget ${o.budget} is over the limit of ${l.maxPerOrder} per order` };
   const perDay = o.budget / o.days;
   if (committed.perDay + perDay > l.dailyLimit) return { ok: false, reason: `${committed.perDay.toFixed(2)} a day is already committed; with ${perDay.toFixed(2)} more it would be over the daily limit of ${l.dailyLimit}` };

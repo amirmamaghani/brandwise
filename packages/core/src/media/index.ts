@@ -26,22 +26,42 @@ export function createMedia(deps: {
   const q = async (sql: string, params: unknown[] = []) => (await core.pool.query(sql, params)).rows;
   const order = async (entryId: string) => { const r = (await q("select * from media_order where entry_id = $1", [entryId]))[0]; return r ? orderFrom(r) : null; };
 
-  /** What live and approved orders of the brand already commit: per day (budget over days, while running) and this month. */
+  /**
+   * What the brand's orders already commit. Per day: drafts and live orders still running (budget over days). This month: every order
+   * scheduled this month whatever became of it (live, paused, ended), or its actual media spend if that is more; only refused orders and
+   * cancelled or never-bought entries are left out. A pending budget change commits its increase; an executed one lives in its order.
+   */
   async function committed(campaignId: string, except?: string) {
     const all = await core.campaigns.list();
     const c = all.find((x) => x.id === campaignId);
     const ids = all.filter((x) => x.rootId === (c?.rootId ?? campaignId)).map((x) => x.id);
     const now = await deps.now(), month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
     const rows = await q(
-      `select o.*, e.scheduled_at from media_order o join content_calendar e on e.id = o.entry_id
-       where e.campaign_id = any($1::uuid[]) and o.status in ('draft', 'live') and e.status not in ('cancelled', 'failed') and ($2::text is null or o.entry_id <> $2)`, [ids, except ?? null]);
+      `select o.*, e.scheduled_at, e.status as entry_status, prev.budget as prev_budget,
+              (select coalesce(sum(amount), 0) from cost_entry ce where ce.kind = 'media' and ce.entry_id = o.entry_id) as spent
+       from media_order o join content_calendar e on e.id = o.entry_id left join media_order prev on prev.entry_id = o.order_of
+       where e.campaign_id = any($1::uuid[]) and o.status <> 'refused' and ($2::text is null or o.entry_id <> $2)`, [ids, except ?? null]);
     let perDay = 0, monthTotal = 0;
     for (const r of rows) {
+      const bought = r.status === "live" || r.status === "paused" || r.status === "ended";
+      if (!bought && (r.entry_status === "cancelled" || r.entry_status === "failed")) continue;
+      if (r.action === "budget_change") {
+        if (r.status === "draft") { const inc = Math.max(0, Number(r.budget) - Number(r.prev_budget ?? 0)); perDay += inc / r.days; monthTotal += inc; }
+        continue;
+      }
       const start = Date.parse(r.scheduled_at), end = start + r.days * DAY;
-      if (end > now.getTime()) perDay += Number(r.budget) / r.days;
-      if (new Date(r.scheduled_at).toISOString() >= month || r.status === "live") monthTotal += Number(r.budget);
+      if ((r.status === "draft" || r.status === "live") && end > now.getTime()) perDay += Number(r.budget) / r.days;
+      if (new Date(r.scheduled_at).toISOString() >= month || r.status === "live") monthTotal += Math.max(Number(r.budget), Number(r.spent));
     }
     return { perDay, month: monthTotal };
+  }
+
+  /** A boosted post or a changed order must be the same brand's. */
+  async function sameBrand(campaignId: string, entryId: string) {
+    const all = await core.campaigns.list();
+    const e = await core.calendar.get(entryId);
+    const root = (id: string) => all.find((x) => x.id === id)?.rootId;
+    return e !== null && root(e.campaignId) !== undefined && root(e.campaignId) === root(campaignId);
   }
 
   async function ensureLimits(campaignId: string, o: { budget: number; days: number; currency: string }, except?: string) {
@@ -64,10 +84,12 @@ export function createMedia(deps: {
       if (input.action === "boost") {
         const post = input.boostOf ? await core.calendar.get(input.boostOf) : null;
         if (!post || post.status !== "published") throw new Error("A boost promotes a published post: give its entry with --boost");
+        if (!(await sameBrand(input.campaignId, post.id))) throw new Error("A boost promotes a post of the same brand");
       }
       if (input.action === "budget_change") {
         const prev = input.orderOf ? await order(input.orderOf) : null;
         if (!prev || prev.status !== "live") throw new Error("A budget change changes a live order: give its entry with --order");
+        if (!(await sameBrand(input.campaignId, prev.entryId))) throw new Error("A budget change changes an order of the same brand");
       }
       await ensureLimits(input.campaignId, { budget: input.budget, days: input.days, currency });
       const entry = await core.calendar.add({ campaignId: input.campaignId, title: input.name, channel: "ads", scheduledAt: input.at, tier: 3, body: input.body, link: input.link ?? null, assetId: input.assetId ?? null, createdBy: input.createdBy });
@@ -84,6 +106,9 @@ export function createMedia(deps: {
         async publish({ entry, target, asset, idempotencyKey }) {
           const o = await order(entry.id);
           if (!o) throw new Error(`Entry ${entry.id} has no media order`);
+          // money moves only for what a person approved on a page, and only for the brand's own posts and orders
+          if (entry.approvedBy !== "ui") throw new Error(`Entry ${entry.id} was not approved by a person in the UI: nothing is bought`);
+          for (const ref of [o.boostOf, o.orderOf]) if (ref && !(await sameBrand(entry.campaignId, ref))) throw new Error(`Entry ${ref} belongs to another brand: nothing is bought`);
           const buyer = deps.buyers.find((b) => b.id === target?.provider);
           if (!buyer) throw new Error(`No ads platform "${target?.provider ?? ""}" is configured`);
           await ensureLimits(entry.campaignId, o, entry.id);   // limits may have changed since the order was made

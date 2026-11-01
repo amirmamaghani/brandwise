@@ -15,6 +15,8 @@ export type SettingField = {
   default?: SettingValue;
   /** Tells the UI to draw a purpose built control instead of a plain input (e.g. "instagram-session"). */
   widget?: string;
+  /** Changed only by a person in the UI, never from the CLI (which agents call): money limits and switches that start agents. */
+  userOnly?: boolean;
 };
 /** null = global. */
 export type Scope = string | null;
