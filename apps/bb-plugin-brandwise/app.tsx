@@ -149,14 +149,16 @@ function CreativeTile({ creative, onOpen }: { creative: Creative; onOpen: () => 
       )}
       aria-label={`Open ${creative.name}`}
     >
-      <div className="relative flex aspect-[4/5] items-center justify-center bg-muted/40">
+      {/* every tile has the same 4:5 frame, whatever the creative's shape: the picture fills it (the preview shows the whole frame),
+          and overflow-hidden stops a tall picture from stretching the frame, which made tiles of one row different heights */}
+      <div className="relative flex aspect-[4/5] items-center justify-center overflow-hidden bg-muted/40">
         {failed ? (
           <div className="flex flex-col items-center gap-1 px-4 text-center text-xs text-muted-foreground">
             <Icon name={isVideo ? "Film" : "Image"} className="size-6" />
             {kb(creative.bytes)}, open to preview
           </div>
         ) : (
-          <img src={creative.thumb} alt="" loading="lazy" onError={() => setFailed(true)} className="size-full object-contain" />
+          <img src={creative.thumb} alt="" loading="lazy" onError={() => setFailed(true)} className="absolute inset-0 size-full object-cover" />
         )}
         {isVideo ? <span className="absolute bottom-2 right-2 flex size-8 items-center justify-center rounded-full bg-background/90 backdrop-blur"><Icon name="Play" className="size-4" /></span> : null}
         <div className="absolute left-2 top-2"><StatusBadge status={creative.status} /></div>
