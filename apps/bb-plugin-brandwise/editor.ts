@@ -22,13 +22,13 @@ export function fmtSignals(s: Signals): string {
   for (const g of s.goals) lines.push(`  ${g.metric.padEnd(17)} ${g.kind === "target" ? "target >=" : "limit  <="} ${pct(g.value)}   now ${pct(g.current)} (n=${g.sample})   ${g.ok === null ? "no data" : g.ok ? "OK" : `gap ${pct(g.gap)}`}`);
   if (s.goals.length === 0) lines.push("  none set: ask a person to set goals (editor goals set ...)");
   lines.push("", "Recent sends (newest first):");
-  for (const r of s.recent) lines.push(`  ${r.entryId}  ${r.mature ? "mature " : `matures ${r.maturesAt?.slice(0, 16) ?? "?"}`}  delivered ${String(r.delivered).padStart(5)}  click ${pct(r.clickRate)} [${r.clickRateCi ? `${pct(r.clickRateCi[0])}..${pct(r.clickRateCi[1])}` : "n/a"}]  complaints ${pct(r.complaintRate, 2)}  "${r.title}"${r.guard ? `   GUARD: ${r.guard}` : ""}`);
+  for (const r of s.recent) lines.push(`  ${r.entryId}  ${r.mature ? "mature " : `matures ${r.maturesAt?.slice(0, 16) ?? "?"}`}  ${r.channel.padEnd(8)} exposures ${(r.exposures === null ? "n/a" : String(r.exposures)).padStart(5)}  click ${pct(r.clickRate)} [${r.clickRateCi ? `${pct(r.clickRateCi[0])}..${pct(r.clickRateCi[1])}` : "n/a"}]  complaints ${pct(r.complaintRate, 2)}  "${r.title}"${r.guard ? `   GUARD: ${r.guard}` : ""}`);
   if (s.recent.length === 0) lines.push("  nothing sent yet");
   lines.push("", "Experiments:");
   for (const e of s.experiments.running) lines.push(`  RUNNING ${e.id}: "${e.hypothesis}" (A ${e.armA}, B ${e.armB}) -> ${e.verdict}${e.reasons.length ? ": " + e.reasons.join("; ") : ""}${e.readyAt ? `   look again after ${e.readyAt.slice(0, 16)}` : ""}`);
   for (const e of s.experiments.recentlyConcluded) lines.push(`  done    ${e.id}: "${e.hypothesis}" -> ${e.verdict}`);
   if (s.experiments.running.length + s.experiments.recentlyConcluded.length === 0) lines.push("  none");
-  if (s.power) lines.push("", `Power: with about ${s.power.deliveredPerArm} delivered per arm at a ${pct(s.power.clickRate)} click rate, an experiment can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive.`);
+  if (s.power) lines.push("", `Power: with about ${s.power.exposuresPerArm} exposures per arm at a ${pct(s.power.clickRate)} click rate, an experiment can only show a lift of about ${pct(s.power.minDetectableLift, 0)} or more; a smaller real effect will end inconclusive.`);
   const p = s.allowed.proposeExperiment;
   lines.push("", `May start a new experiment now: ${p.ok ? "yes" : `no, ${p.reason}`}`);
   for (const n of s.notes) lines.push(`Note: ${n}`);

@@ -30,16 +30,34 @@ Wherever `--campaign <c>` is accepted, `<c>` is an id or a name. It may be left 
 | `bb brandwise calendar list [--campaign <c>]` | Entries: id, time (UTC), channel, tier, status, campaign. |
 | `bb brandwise calendar add "<title>" --channel <c> --at <ISO date> --tier <1\|2\|3> [--campaign <c>] [--asset <asset-id>] [--body "<text>"] [--link <url>]` | Add an entry. `--body` is the text exactly as it will be published (caption, e-mail text), `--link` an http(s) URL. A reviewer approves what they can read, so always fill the body. Tier 1 is approved automatically, tiers 2 and 3 wait for a human. |
 | `bb brandwise calendar edit <id> [--title <t>] [--body "<text>"] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <asset-id>]` | Change an entry. Changing title, text, link, channel or creative of an approved tier 2 or 3 entry sends it back for approval; moving the time does not. Published and cancelled entries cannot be edited. |
-| `bb brandwise calendar request-changes <id> "<note>"` | Send a pending entry back to its author with a note (what a human uses when they do not approve as is). |
+| `bb brandwise calendar request-changes <id> "<note>" [--reason claims\|facts\|tone\|brand\|visual\|legal\|typo\|offer\|other]` | Send a pending entry back to its author with a note (what a human uses when they do not approve as is). |
+| `bb brandwise calendar tagged-link <id>` | The entry's link with its UTM tags. Give it to whoever publishes the entry by hand (an ad in Ads Manager, a post made in an app), so visits are traced back to the entry. |
+| `bb brandwise calendar published <id> --external <platform id> [--url <url>]` | Record that an entry waiting to be published by hand (`needs_manual`) was published, and where: for `meta_ads` the ad id. Only when the user says it was published; never guess an id. |
+| `bb brandwise calendar history <id>` | Every action on the entry, oldest first: who, when, status change, and every send-back note with its reason (a later edit does not erase them). |
 | `bb brandwise calendar unapprove <id>` | Take an upcoming approved entry back to `pending_approval`. Approving it again is a manual step for a human, also for tier 1. |
 | `bb brandwise calendar approve <id>` | Approve a pending entry. Do this only when the user says so. |
 | `bb brandwise calendar cancel <id>` | Cancel an entry. |
+
+Calendar commands that change an entry take `--as <label>` (for example `--as author`); the history records `cli:<label>`. Name yourself by your role, never `ui`, `auto` or `scheduler`.
+
+Links in an entry's text and its `--link` are tagged on publishing (`utm_content` is the entry id), so write plain links without UTM parameters of your own.
 
 An entry whose publish time has come (now counts) accepts no action at all: not edit, request-changes, approve, unapprove or cancel; the command fails with "already took place, no actions allowed". Cancelled and published entries accept none either. Check the time before you act.
 
 An entry with status `changes_requested` was sent back by a human: `calendar list` prints their note under it. Revise it with `calendar edit` (any edit resubmits it for approval) and do not argue with the note; if it cannot be done as asked, say why in your reply to the user.
 
 Times without an offset are read in the server's local time and shown in UTC.
+
+## Metrics
+
+| Command | Effect |
+| --- | --- |
+| `bb brandwise metrics entry <id> [--as-of <ISO>]` | The numbers of one entry from every source that measures its channel (exposures, clicks, ...). A metric that is not listed is unknown, not 0. |
+| `bb brandwise metrics campaign [--campaign <c>] [--as-of <ISO>]` | The same for every published entry of the campaign (an always-on base includes the campaigns under it), ending with the funnel: exposures, clicks, site visits, leads, orders, revenue. Site numbers come from GA4 with a delay of hours. |
+| `bb brandwise metrics sources` | Which sources exist, the channels they measure and what they can report. |
+| `bb brandwise metrics links <id>` | Our short links of a published post: where each leads, clicks, unique visitors, and requests by previews and crawlers (not counted). |
+
+Read these before you say how a post or an e-mail performed; never estimate numbers yourself.
 
 ## Assets
 

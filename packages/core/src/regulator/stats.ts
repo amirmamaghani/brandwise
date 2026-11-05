@@ -16,13 +16,30 @@ export function wilson(k: number, n: number, z = 1.96): { low: number; high: num
   return { low: Math.max(0, centre - half), high: Math.min(1, centre + half) };
 }
 
+/** (z of a two-sided 5 % test + z of 80 % power) squared: 7.85. */
+const POWER_K = (1.96 + 0.8416) ** 2;
+
+/** Recipients per arm an A/B test needs to show a change from rate p1 to p2 (two-sided 5 %, 80 % power), each arm with its own variance. */
+export function requiredPerArm(p1: number, p2: number): number {
+  return (POWER_K * (p1 * (1 - p1) + p2 * (1 - p2))) / (p2 - p1) ** 2;
+}
+
 /**
  * The smallest relative lift (0.3 = 30 %) an A/B test with `nPerArm` recipients per arm can show reliably (two-sided 5 % significance,
  * 80 % power) when the base rate is `rate`. Smaller effects will end inconclusive however real they are: the experiment is underpowered.
+ * Solves requiredPerArm(rate, rate x (1 + lift)) = nPerArm, so the challenger's own variance counts (the earlier formula gave both
+ * arms the control's and promised too much: +72 % instead of +85 % at 2 % and 1,500 per arm). Null when no lift up to a rate of 1 is
+ * detectable.
  */
 export function minDetectableLift(rate: number, nPerArm: number): number | null {
   if (!(rate > 0) || rate >= 1 || nPerArm <= 0) return null;
-  return ((1.96 + 0.8416) * Math.sqrt((2 * rate * (1 - rate)) / nPerArm)) / rate;
+  let lo = 0, hi = (1 - rate) / rate - 1e-9;
+  if (requiredPerArm(rate, rate * (1 + hi)) > nPerArm) return null;
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    if (requiredPerArm(rate, rate * (1 + mid)) > nPerArm) lo = mid; else hi = mid;
+  }
+  return hi;
 }
 
 export type RateComparison = { rateA: number; rateB: number; lift: number | null; z: number; p: number };

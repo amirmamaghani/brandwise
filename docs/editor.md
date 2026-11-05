@@ -7,7 +7,7 @@ People set the goals. An **editor agent** watches the results and steers the cam
 | Control theory | In BrandWise |
 |---|---|
 | Setpoint | goals per campaign: `click_rate` target, `complaint_rate` / `unsubscribe_rate` / `bounce_rate` limits. Set by a person. |
-| Sensor | e-mail events turned into counts and signals (`bb brandwise editor signals`) |
+| Sensor | the metrics of published entries from every metrics source (`packages/core/src/metrics`, `docs/analytics.md`), turned into signals (`bb brandwise editor signals`); today the only source is e-mail |
 | Controller | the editor agent (skill `editor`), one run per invocation, memory in the journal |
 | Actuator | tasks for author agents, then calendar entries, then the scheduler and the provider |
 | Plant | the audience and the mailbox providers |
@@ -22,12 +22,12 @@ Code, not prompt: an agent can ask, it cannot overrule. Each rule answers a know
 | Rule | Why |
 |---|---|
 | **Maturity**: an arm is judged 24 h after sending, never earlier | reacting to data that is still arriving makes the loop oscillate |
-| **Minimum sample**: 200 delivered per arm | do not decide on noise |
+| **Minimum sample**: 200 exposures per arm (delivered e-mails, views, impressions) | do not decide on noise |
 | **Significance and minimum lift (hysteresis)**: p < 0.05 and at least 10 % relative difference | the incumbent changes only for a clear, sizeable win |
 | **Cooldown**: 24 h after an adoption | let a change settle, one change at a time |
 | **One running experiment** per campaign | one variable at a time, so a result has one cause |
-| **Guards**: complaint rate 0.3 %, unsubscribe rate 1 % | limits, not goals (Goodhart): a clickbait winner is rejected; two unsafe arms **freeze** the campaign until a person clears it |
-| **Separate audiences**: the arms are entries in two different child campaigns | otherwise the same people get both variants |
+| **Guards**: complaint rate 0.3 %, unsubscribe rate 1 % | limits, not goals (Goodhart): a clickbait winner is rejected; two unsafe arms **freeze** the campaign until a person clears it. A guard on a number the source cannot measure is not checked (it is unknown, not 0) |
+| **Separate audiences**: the arms are entries in two different child campaigns, on the same channel, and a source must measure exposures and clicks there | otherwise the same people get both variants, the channel becomes a second variable, or the test can never conclude |
 | **Final verdicts**: a concluded experiment cannot be re-judged | the agent cannot shop for a better answer |
 
 The statistics (`stats.ts`) are two-sided two-proportion z-test and Wilson intervals. Guards use the point estimate on purpose: a false alarm costs less than a breach.

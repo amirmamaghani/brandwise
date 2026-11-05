@@ -10,7 +10,8 @@ import { compareRates, wilson, type RateComparison } from "./stats.ts";
 
 export type Rails = {
   matureAfterHours: number;
-  minDeliveredPerArm: number;
+  /** Exposures (delivered e-mails, views, impressions) an arm needs before it can be judged. */
+  minExposuresPerArm: number;
   significance: number;      // two-sided p-value must be below this
   minRelativeLift: number;   // and the winner must be at least this much better (0.1 = 10 %)
   cooldownHours: number;     // after an adoption
@@ -20,7 +21,7 @@ export type Rails = {
 
 export const DEFAULT_RAILS: Rails = {
   matureAfterHours: 24,
-  minDeliveredPerArm: 200,
+  minExposuresPerArm: 200,
   significance: 0.05,
   minRelativeLift: 0.1,
   cooldownHours: 24,
@@ -28,7 +29,11 @@ export const DEFAULT_RAILS: Rails = {
   guards: { complaintRate: 0.003, unsubscribeRate: 0.01 },
 };
 
-export type ArmData = { entryId: string; sentAt: string | null; delivered: number; clicks: number; complaints: number; unsubscribes: number };
+/**
+ * One arm's numbers, whatever the channel: exposures (delivered e-mails, views, impressions) and clicks are needed to judge;
+ * complaints and unsubscribes are null when the source cannot measure them, and a guard on an unknown number is not checked.
+ */
+export type ArmData = { entryId: string; sentAt: string | null; exposures: number; clicks: number; complaints: number | null; unsubscribes: number | null };
 
 const hours = (ms: number) => ms / 3_600_000;
 
@@ -41,11 +46,11 @@ export const isMature = (a: ArmData, asOf: Date, rails: Rails) => {
   return at !== null && Date.parse(at) <= asOf.getTime();
 };
 
-/** Which guard a set of numbers breaks, if any. Needs a minimum sample to count (rare events are noisy). */
+/** Which guard a set of numbers breaks, if any. Needs a minimum sample to count (rare events are noisy); unknown numbers are skipped. */
 export function brokenGuard(a: ArmData, rails: Rails): string | null {
-  if (a.delivered < rails.minDeliveredPerArm) return null;
-  if (a.complaints / a.delivered > rails.guards.complaintRate) return `complaint rate ${(100 * a.complaints / a.delivered).toFixed(2)} % is over the ${(100 * rails.guards.complaintRate).toFixed(2)} % limit`;
-  if (a.unsubscribes / a.delivered > rails.guards.unsubscribeRate) return `unsubscribe rate ${(100 * a.unsubscribes / a.delivered).toFixed(2)} % is over the ${(100 * rails.guards.unsubscribeRate).toFixed(2)} % limit`;
+  if (a.exposures < rails.minExposuresPerArm) return null;
+  if (a.complaints !== null && a.complaints / a.exposures > rails.guards.complaintRate) return `complaint rate ${(100 * a.complaints / a.exposures).toFixed(2)} % is over the ${(100 * rails.guards.complaintRate).toFixed(2)} % limit`;
+  if (a.unsubscribes !== null && a.unsubscribes / a.exposures > rails.guards.unsubscribeRate) return `unsubscribe rate ${(100 * a.unsubscribes / a.exposures).toFixed(2)} % is over the ${(100 * rails.guards.unsubscribeRate).toFixed(2)} % limit`;
   return null;
 }
 
@@ -58,7 +63,7 @@ export type Verdict = {
 };
 
 /**
- * Judge an A/B experiment (A = control, B = challenger) on click rate (unique clicks / delivered). Pure: same numbers, same verdict.
+ * Judge an A/B experiment (A = control, B = challenger) on click rate (clicks / exposures). Pure: same numbers, same verdict.
  * A (keep) is always the safe default; B needs to be clearly better AND safe.
  */
 export function judge(a: ArmData, b: ArmData, asOf: Date, rails: Rails): Verdict {
@@ -74,14 +79,14 @@ export function judge(a: ArmData, b: ArmData, asOf: Date, rails: Rails): Verdict
   }
   if (waits.length > 0) return { verdict: "wait", reasons: waits, readyAt: pending.length > 0 ? pending.sort().at(-1)! : null, stats: null };
 
-  const cmp = compareRates(a.clicks, a.delivered, b.clicks, b.delivered);
-  const stats = { ...cmp, ciA: wilson(a.clicks, a.delivered), ciB: wilson(b.clicks, b.delivered) };
+  const cmp = compareRates(a.clicks, a.exposures, b.clicks, b.exposures);
+  const stats = { ...cmp, ciA: wilson(a.clicks, a.exposures), ciB: wilson(b.clicks, b.exposures) };
   const guardA = brokenGuard(a, rails), guardB = brokenGuard(b, rails);
   if (guardA && guardB) return { verdict: "freeze", reasons: [`both arms break a guard: A ${guardA}; B ${guardB}`], readyAt: null, stats };
   if (guardB) return { verdict: "A", reasons: [`B is unsafe: ${guardB}`], readyAt: null, stats };
   if (guardA) return { verdict: "B", reasons: [`A is unsafe (${guardA}), B is the safe arm`], readyAt: null, stats };
-  const small = [["A", a], ["B", b]].filter(([, arm]) => (arm as ArmData).delivered < rails.minDeliveredPerArm).map(([n]) => n);
-  if (small.length > 0) return { verdict: "inconclusive", reasons: [`too few delivered in arm ${small.join(" and ")} (minimum ${rails.minDeliveredPerArm})`], readyAt: null, stats };
+  const small = [["A", a], ["B", b]].filter(([, arm]) => (arm as ArmData).exposures < rails.minExposuresPerArm).map(([n]) => n);
+  if (small.length > 0) return { verdict: "inconclusive", reasons: [`too few exposures in arm ${small.join(" and ")} (minimum ${rails.minExposuresPerArm})`], readyAt: null, stats };
   const clear = cmp.p < rails.significance && cmp.lift !== null && Math.abs(cmp.lift) >= rails.minRelativeLift;
   if (!clear) return { verdict: "inconclusive", reasons: [`no clear difference: lift ${cmp.lift === null ? "n/a" : (100 * cmp.lift).toFixed(1) + " %"}, p = ${cmp.p.toFixed(3)} (needs p < ${rails.significance} and a lift of at least ${100 * rails.minRelativeLift} %)`], readyAt: null, stats };
   return cmp.rateB > cmp.rateA

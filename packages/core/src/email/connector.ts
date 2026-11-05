@@ -3,7 +3,7 @@
 // (one send per entry), so a failure after creating never produces a second campaign.
 import type { Connector } from "../publish.ts";
 import type { EmailProvider, EmailStore } from "./domain/ports.ts";
-import { renderEmail } from "./domain/render.ts";
+import { campaignSlug, renderEmail } from "./domain/render.ts";
 
 export function emailConnector(providers: EmailProvider[], store: EmailStore, renderIdFor?: (entryId: string) => Promise<string | null>): Connector {
   const find = (id: string | undefined) => {
@@ -21,7 +21,7 @@ export function emailConnector(providers: EmailProvider[], store: EmailStore, re
       const provider = find(send?.provider ?? t.provider);
       if (!send) {
         if (!t.from) throw new Error("The campaign's email target has no from=");
-        const { html, text } = renderEmail({ body: entry.body || entry.title, link: entry.link, entryId: entry.id, unsubscribeTag: provider.sender.unsubscribeTag });
+        const { html, text } = renderEmail({ body: entry.body || entry.title, link: entry.link, entryId: entry.id, unsubscribeTag: provider.sender.unsubscribeTag, campaign: campaignSlug(entry.campaignName) });
         const { externalId } = await provider.sender.createCampaign({
           name: `${entry.campaignName}: ${entry.title}`.slice(0, 200), subject: entry.title, html, text: text || undefined,
           from: t.from, replyTo: t.replyTo || undefined, target: t, tags: { bw_entry: entry.id },

@@ -10,6 +10,7 @@ import { runDue } from "../publish.ts";
 import { purge } from "../testing.ts";
 import { expectedRates } from "../email/adapters/sim-model.ts";
 import { createEmail } from "../email/index.ts";
+import { createMetrics } from "../metrics/index.ts";
 import { createRegulator } from "./index.ts";
 import { regulatorStore } from "./store.ts";
 
@@ -24,7 +25,7 @@ async function setup(prefix: string) {
   const before = await rstore.clockOffset();
   await rstore.setClockOffset(0); // every test starts from real time; the previous offset comes back afterwards
   const email = createEmail({ pool: core.pool, salt: "loop-test", sim: { now: async () => new Date(Date.now() + (await rstore.clockOffset()) * 1000) } });
-  const reg = createRegulator({ core, email });
+  const reg = createRegulator({ core, metrics: createMetrics({ core, sources: [email.metricsSource()] }) });
   const base = await core.campaigns.add({ name: `${prefix}-base`, kind: "always_on" });
   await reg.goals.set(base.id, "click_rate", "target", 0.06);
   await reg.goals.set(base.id, "complaint_rate", "limit", 0.003);

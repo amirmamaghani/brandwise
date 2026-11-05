@@ -1,16 +1,15 @@
-// The regulator: feedback control of an e-mail campaign. Agents (the editor) read signals and propose; this module owns the rules
-// (rails.ts), concludes experiments, and keeps goals, journal and tasks. It never sends anything: changes go through the calendar.
+// The regulator: feedback control of a campaign. Agents (the editor) read signals and propose; this module owns the rules (rails.ts),
+// concludes experiments, and keeps goals, journal and tasks. It never sends anything: changes go through the calendar. Numbers come
+// from the metrics service, so any channel with a metrics source can be regulated, not only e-mail.
 import type { Core } from "../index.ts";
-import type { createEmail } from "../email/index.ts";
 import type { Library } from "../email/templates/library.ts";
+import type { Metrics } from "../metrics/index.ts";
 import { DEFAULT_RAILS, canPropose, judge, type Rails } from "./rails.ts";
 import { GOAL_METRICS, armOf, buildSignals, type Goal, type GoalMetric, type SendView } from "./signals.ts";
 import { regulatorStore, type ExperimentRow } from "./store.ts";
 
-type Email = ReturnType<typeof createEmail>;
-
-export function createRegulator(deps: { core: Core; email: Email; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null }) {
-  const { core, email } = deps;
+export function createRegulator(deps: { core: Core; metrics: Metrics; rails?: Partial<Rails>; /** The template library: lets an experiment vary a slot or a template version, not only the subject. */ library?: () => Library | null }) {
+  const { core, metrics } = deps;
   const rails: Rails = { ...DEFAULT_RAILS, ...deps.rails, guards: { ...DEFAULT_RAILS.guards, ...deps.rails?.guards } };
   const store = regulatorStore(core.pool);
 
@@ -22,18 +21,14 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
   };
   const asOfDate = async (asOf?: string) => (asOf ? new Date(asOf) : clock.now());
 
-  /** Every e-mail send under the campaign (base or itself), as numbers at the given time. */
+  /** Every published entry under the campaign (base or itself) that a metrics source measures, as numbers at the given time. */
   async function sendViews(campaignId: string, asOf: Date): Promise<SendView[]> {
-    const campaigns = (await core.campaigns.list()).filter((c) => c.id === campaignId || c.rootId === campaignId);
-    const views: SendView[] = [];
-    for (const c of campaigns) {
-      for (const send of await email.store.sends({ campaignId: c.id })) {
-        const s = await email.stats({ entryId: send.entryId, asOf: asOf.toISOString() });
-        views.push({ entryId: send.entryId, title: (await core.calendar.get(send.entryId))?.title ?? send.entryId, campaignId: c.id, sentAt: send.sentAt && Date.parse(send.sentAt) <= asOf.getTime() ? send.sentAt : null, counts: s.counts });
-      }
-    }
-    return views;
+    const entries = (await metrics.published(campaignId)).filter((e) => metrics.sourcesFor(e.channel).length > 0);
+    const numbers = await metrics.forEntries(entries, asOf);
+    return entries.map((e, i) => ({ entryId: e.id, title: e.title, campaignId: e.campaignId, channel: e.channel, sentAt: startedBy(numbers[i].startedAt, asOf), metrics: numbers[i] }));
   }
+  /** A start after `asOf` has not happened yet at that moment. */
+  const startedBy = (startedAt: string | null, asOf: Date) => (startedAt && Date.parse(startedAt) <= asOf.getTime() ? startedAt : null);
 
   const view = (e: ExperimentRow) => ({ id: e.id, hypothesis: e.hypothesis, armA: e.armA, armB: e.armB, status: e.status, verdict: e.verdict, createdAt: e.createdAt, concludedAt: e.concludedAt });
 
@@ -44,9 +39,8 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
   }
 
   async function armData(entryId: string, at: Date) {
-    const s = await email.stats({ entryId, asOf: at.toISOString() });
-    const sentAt = s.sends[0]?.sentAt ?? null;
-    return armOf({ entryId, title: "", campaignId: "", sentAt: sentAt && Date.parse(sentAt) <= at.getTime() ? sentAt : null, counts: s.counts });
+    const m = await metrics.entry(entryId, at);
+    return armOf({ entryId, title: "", campaignId: "", channel: m.channel, sentAt: startedBy(m.startedAt, at), metrics: m });
   }
 
   return {
@@ -75,7 +69,9 @@ export function createRegulator(deps: { core: Core; email: Email; rails?: Partia
         if (!ok.ok) throw new Error(`Cannot start an experiment: ${ok.reason}`);
         if (!a || !b) throw new Error(`Entry ${!a ? input.armA : input.armB} does not exist`);
         if (a.id === b.id) throw new Error("The two arms must be two different entries");
-        if (a.channel !== "email" || b.channel !== "email") throw new Error("Experiments run on e-mail entries only (channel email)");
+        if (a.channel !== b.channel) throw new Error(`Both arms must be on the same channel (A is ${a.channel}, B is ${b.channel}): a channel is not a variable an A/B test can isolate`);
+        const measures = new Set(metrics.sourcesFor(a.channel).flatMap((s) => s.measures));
+        if (!measures.has("exposures") || !measures.has("clicks")) throw new Error(`No metrics source measures exposures and clicks on channel ${a.channel}, so an experiment there could never conclude`);
         const campaigns = await core.campaigns.list();
         const base = campaigns.find((c) => c.id === input.campaignId);
         if (!base) throw new Error("Unknown campaign");

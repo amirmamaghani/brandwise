@@ -4,12 +4,19 @@
 // shortcut: the Bot API has no idempotency key, so a crash between "sent" and "recorded" can post twice; fine for a first channel,
 // move to a sent-marker table before high-volume use. Photos up to 10 MB and videos up to 50 MB (Bot API upload limits).
 import type { Connector } from "./publish.ts";
+import { campaignSlug, tagText, withUtm } from "./email/domain/render.ts";
+import { replaceUrls } from "./links/domain.ts";
 
 const CAPTION_MAX = 1024;
 const TEXT_MAX = 4096;
 const MB = 1_000_000;
 
-export function telegram(opts: { token: string; fetchImpl?: typeof fetch }): Connector {
+export function telegram(opts: {
+  token: string;
+  fetchImpl?: typeof fetch;
+  /** Our short link for a link of the entry (docs/analytics.md, step 3), so its clicks are counted; without it links stay as they are. */
+  shorten?: (entryId: string, url: string) => Promise<string>;
+}): Connector {
   const call = async (method: string, body: FormData | Record<string, unknown>) => {
     const isForm = body instanceof FormData;
     const res = await (opts.fetchImpl ?? fetch)(`https://api.telegram.org/bot${opts.token}/${method}`, {
@@ -28,7 +35,10 @@ export function telegram(opts: { token: string; fetchImpl?: typeof fetch }): Con
     async publish({ entry, asset, target }) {
       const chatId = target?.chatId;
       if (!chatId) throw new Error("No chatId in the campaign's telegram target");
-      const text = [entry.body.trim(), entry.link ?? ""].filter(Boolean).join("\n\n");
+      // links carry the entry (utm_content), so a visit or a lead from the post is traced back to it (docs/analytics.md D6)
+      const utm = { entryId: entry.id, campaign: campaignSlug(entry.campaignName), medium: "messenger", source: "telegram" };
+      const tagged = [tagText(entry.body.trim(), utm), entry.link ? withUtm(entry.link, utm) : ""].filter(Boolean).join("\n\n");
+      const text = opts.shorten ? await replaceUrls(tagged, (url) => opts.shorten!(entry.id, url)) : tagged;
       if (text === "" && !asset) throw new Error("Entry has no text and no creative to post");
       let sent;
       if (asset && (asset.kind === "image" || asset.kind === "video")) {

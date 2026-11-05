@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { expectedRates } from "../email/adapters/sim-model.ts";
 import { DEFAULT_RAILS, canPropose, judge, type ArmData } from "./rails.ts";
-import { compareRates, minDetectableLift, normalCdf, wilson } from "./stats.ts";
+import { compareRates, minDetectableLift, normalCdf, requiredPerArm, wilson } from "./stats.ts";
 
 const R = DEFAULT_RAILS;
 const T0 = "2026-01-01T00:00:00.000Z";
 const at = (hoursAfter: number) => new Date(Date.parse(T0) + hoursAfter * 3_600_000);
-const arm = (over: Partial<ArmData> = {}): ArmData => ({ entryId: "e", sentAt: T0, delivered: 1000, clicks: 30, complaints: 0, unsubscribes: 0, ...over });
+const arm = (over: Partial<ArmData> = {}): ArmData => ({ entryId: "e", sentAt: T0, exposures: 1000, clicks: 30, complaints: 0, unsubscribes: 0, ...over });
 
 test("stats: normal CDF, Wilson interval and the two-proportion test agree with known values", () => {
   assert.ok(Math.abs(normalCdf(1.96) - 0.975) < 1e-3 && Math.abs(normalCdf(0) - 0.5) < 1e-6);
@@ -19,9 +19,12 @@ test("stats: normal CDF, Wilson interval and the two-proportion test agree with 
 });
 
 test("power: what an audience can show, and that the test agrees with it", () => {
+  // textbook sample sizes, each arm with its own variance
+  assert.deepEqual([[0.02, 0.03], [0.02, 0.025], [0.005, 0.01], [0.005, 0.0075]].map(([a, b]) => Math.round(requiredPerArm(a, b) / 100) * 100), [3800, 13800, 4700, 15600]);
+  assert.equal(Math.round(100 * minDetectableLift(0.02, 1500)!), 85, "a 3,000 list split in two at a 2 % click rate shows +85 %, not +72 %");
   const mde = minDetectableLift(0.03, 600)!;
-  assert.ok(mde > 0.8 && mde < 1.0, `about +90 % at 600 per arm and a 3 % rate, got ${mde}`);
-  assert.ok(minDetectableLift(0.03, 6000)! < mde / 3, "ten times the audience, a third of the lift");
+  assert.ok(mde > 1.0 && mde < 1.2, `about +110 % at 600 per arm and a 3 % rate, got ${mde}`);
+  assert.ok(minDetectableLift(0.03, 6000)! < mde / 2.5, "ten times the audience, well under half the lift");
   assert.equal(minDetectableLift(0, 600), null);
   // a lift just above the minimum is significant with that audience, one well below it is not
   const n = 2000, base = 60, k = (lift: number) => Math.round(base * (1 + lift));
@@ -43,10 +46,10 @@ test("judge: hysteresis. A small or insignificant difference changes nothing, th
   const same = judge(arm(), arm({ clicks: 33 }), at(48), R);
   assert.equal(same.verdict, "inconclusive");
   // significant but below the minimum lift: p < 0.05 and still not worth a change
-  const tiny = judge(arm({ delivered: 200_000, clicks: 6000 }), arm({ delivered: 200_000, clicks: 6400 }), at(48), R);
+  const tiny = judge(arm({ exposures: 200_000, clicks: 6000 }), arm({ exposures: 200_000, clicks: 6400 }), at(48), R);
   assert.ok(tiny.stats!.p < 0.05 && tiny.stats!.lift! < R.minRelativeLift);
   assert.equal(tiny.verdict, "inconclusive");
-  assert.equal(judge(arm({ delivered: 150 }), arm({ delivered: 150, clicks: 60 }), at(48), R).verdict, "inconclusive", "too few delivered");
+  assert.equal(judge(arm({ exposures: 150 }), arm({ exposures: 150, clicks: 60 }), at(48), R).verdict, "inconclusive", "too few exposures");
 });
 
 test("judge: guards are limits, not goals. A winner that breaks one loses; two unsafe arms freeze", () => {
@@ -56,7 +59,7 @@ test("judge: guards are limits, not goals. A winner that breaks one loses; two u
   assert.equal(judge(clickbait, arm({ clicks: 31 }), at(48), R).verdict, "B", "an unsafe control gives way to a safe challenger");
   assert.equal(judge(clickbait, clickbait, at(48), R).verdict, "freeze");
   assert.equal(judge(arm(), arm({ clicks: 90, unsubscribes: 25 }), at(48), R).verdict, "A", "unsubscribes are guarded too");
-  assert.equal(judge(arm({ delivered: 50 }), arm({ delivered: 50, complaints: 5 }), at(48), R).verdict, "inconclusive", "a guard needs a minimum sample to count");
+  assert.equal(judge(arm({ exposures: 50 }), arm({ exposures: 50, complaints: 5 }), at(48), R).verdict, "inconclusive", "a guard needs a minimum sample to count");
 });
 
 test("canPropose: frozen, one running at a time, cooldown after an adoption", () => {

@@ -420,6 +420,8 @@ export function CalendarPage() {
 
 const SELECT = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 const TEXTAREA = "w-full resize-y rounded-md border border-input bg-background p-2 text-sm";
+/** The same closed list as the core's REVIEW_REASONS: send-backs are counted by reason. */
+const REVIEW_REASONS = ["claims", "facts", "tone", "brand", "visual", "legal", "typo", "offer", "other"] as const;
 
 function EntryDialog({
   entry,
@@ -438,6 +440,8 @@ function EntryDialog({
   const preview = creative === undefined ? null : (creative.dataUri ?? creative.thumb);
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
+  const [reason, setReason] = useState<"" | (typeof REVIEW_REASONS)[number]>("");
+  const [external, setExternal] = useState({ id: "", url: "" });
   const [form, setForm] = useState({ title: "", body: "", link: "", channel: CHANNELS[0], at: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -445,6 +449,8 @@ function EntryDialog({
   useEffect(() => {
     setEditing(false);
     setNote("");
+    setReason("");
+    setExternal({ id: "", url: "" });
     setError(null);
     if (entry !== null) {
       setForm({ title: entry.title, body: entry.body, link: entry.link ?? "", channel: entry.channel, at: toLocalInput(new Date(entry.scheduledAt)) });
@@ -467,7 +473,8 @@ function EntryDialog({
     }
   };
   const decide = (decision: "approve" | "cancel") => entry && run(() => rpc.call("calendar_decide", { id: entry.id, decision }), closeEntry);
-  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note }), closeEntry);
+  const sendBack = () => entry && run(() => rpc.call("calendar_request_changes", { id: entry.id, note, reason: reason === "" ? null : reason }), closeEntry);
+  const markPublished = () => entry && run(() => rpc.call("calendar_published", { id: entry.id, externalId: external.id, url: external.url.trim() || null }), closeEntry);
   const save = () => {
     if (entry === null) return;
     const timeChanged = form.at !== toLocalInput(new Date(entry.scheduledAt));
@@ -507,6 +514,14 @@ function EntryDialog({
               <p className="rounded-md border border-dashed border-destructive/50 p-2 text-sm text-destructive-text" role="status">
                 {entry.status === "approved" ? `Attempt ${entry.attempts} failed, retrying: ` : entry.status === "failed" ? `Failed after ${entry.attempts} attempts: ` : ""}{entry.error}
               </p>
+            ) : null}
+            {entry.status === "needs_manual" ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border p-2">
+                <p className="text-xs text-muted-foreground">Published it by hand? Say where, so its numbers can be found: the ad id for {"meta_ads"}, the post's id or address elsewhere. Use the link from <code>bb brandwise calendar tagged-link {entry.id}</code> so visits are traced to this entry.</p>
+                <input className={SELECT} value={external.id} onChange={(e) => setExternal({ ...external, id: e.target.value })} placeholder="Platform id (e.g. the ad id)" aria-label="Platform id" />
+                <input className={SELECT} value={external.url} onChange={(e) => setExternal({ ...external, url: e.target.value })} placeholder="Address (optional)" aria-label="Address" />
+                <Button variant="outline" disabled={busy || external.id.trim() === ""} onClick={markPublished}>Mark published</Button>
+              </div>
             ) : null}
             {entry.channel === "email" ? <EntryEmailPreview key={`${entry.id}:${entry.body.length}`} entryId={entry.id} /> : null}
             {entry.status === "published" && entry.externalUrl ? (
@@ -573,6 +588,12 @@ function EntryDialog({
                   )}
                   <dt className="text-muted-foreground">Created by</dt>
                   <dd>{entry.createdBy}</dd>
+                  {entry.approvedBy === null ? null : (
+                    <>
+                      <dt className="text-muted-foreground">Approved by</dt>
+                      <dd>{entry.approvedBy}{entry.approvedAt ? ` · ${whenOf(entry.approvedAt)}` : ""}</dd>
+                    </>
+                  )}
                 </dl>
               </>
             )}
@@ -587,6 +608,12 @@ function EntryDialog({
                   aria-label="What should change"
                   autoFocus
                 />
+                <select className={SELECT} value={reason} onChange={(e) => setReason(e.target.value as typeof reason)} aria-label="Reason">
+                  <option value="">Reason (optional)</option>
+                  {REVIEW_REASONS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
               </div>
             ) : null}
             {entry.status === "pending_approval" && entry.tier === 3 && !editing && !changing ? (

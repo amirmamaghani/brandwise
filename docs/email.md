@@ -185,5 +185,5 @@ Build note: provisioning currently copies `packages/core/src/*.ts` with a flat c
 - **One send per entry** (`email_send.entry_id` is unique): a retry after a failure uses the same draft and first asks the provider whether it has already gone out (`status`), so a second campaign or second send is never created.
 - **Privacy:** `raw` contains no addresses or IPs (the adapter replaces them before storing). The recipient is a salted hash and the domain; the salt is a plugin secret.
 - **Webhook** is a plugin HTTP route without bb login (`auth: "none"`, which bb allows only for signed webhooks); without a valid signature nothing is stored.
-- **Email body:** the entry `title` is the subject, `body` is text (or HTML if it starts with `<`), `link` gets UTM tags. An unsubscribe link is always added if the body does not have one.
+- **Email body:** the entry `title` is the subject, `body` is text (or HTML if it starts with `<`), every http(s) link (the `link`, links in the text and in HTML) gets UTM tags with `utm_content=<entry id>` (`docs/analytics.md`, D6). An unsubscribe link is always added if the body does not have one.
 - **Not addressed:** unsubscribes (Resend reports them as contact events, not email events, so `unsubscribe_rate` is "unavailable" for Resend), segmentation, A/B, conversions (`bw_eid`), claim checks before approval.

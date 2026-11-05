@@ -4,8 +4,8 @@
 // Approved entries are fired by `calendar run-due`, which a bb automation runs every minute (infra/bb-instance/provision.sh).
 import { defineRpcContract, type BbPluginApi, type PluginSettingDescriptor } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
-import { randomBytes } from "node:crypto";
+import { cookieJarFor, createCore, downloadResult, isFailed, PROVIDERS, REVIEW_REASONS, sessionFromCookieJar, STATUSES, type Core, type GenSpec, type Provider, type Scope, type SettingValue } from "./core/index.ts";
+import { createHmac, randomBytes } from "node:crypto";
 import * as cp from "node:child_process";
 import * as fsx from "node:fs";
 import * as osx from "node:os";
@@ -15,11 +15,17 @@ import { productCli } from "./product.ts";
 import { createVideo, videoContract } from "./video.ts";
 import { createEmailTemplates, templatesContract } from "./email-templates.ts";
 import { sleep, slug } from "./util.ts";
-import { connectorsFrom, runDue } from "./core/publish.ts";
+import { connectorsFrom, runDue, SHORTENED_CHANNELS } from "./core/publish.ts";
+import { clientAddress, createLinks } from "./core/links/index.ts";
+import { ga4Source, parseServiceAccount } from "./core/site/ga4.ts";
+import { META_CHANNEL, metaAdsSource } from "./core/ads/meta.ts";
+import { campaignSlug, withUtm } from "./core/email/domain/render.ts";
 import { createEmail } from "./core/email/index.ts";
 import { createRegulator } from "./core/regulator/index.ts";
 import { regulatorStore } from "./core/regulator/store.ts";
 import { createEditorCli } from "./editor.ts";
+import { createMetricsCli } from "./metrics-cli.ts";
+import { createMetrics } from "./core/metrics/index.ts";
 import { randomUUID } from "node:crypto";
 import { MODES, allowedModes, applyMode, appliedMode, defHashOf, isModeName, type ModeName } from "./modes.ts";
 
@@ -35,6 +41,7 @@ const entrySchema = z.object({
   scheduledAt: z.string(), tier: tierSchema, status: z.enum(STATUSES), assetId: z.string().nullable(), createdBy: z.string(),
   body: z.string(), link: z.string().nullable(), reviewNote: z.string().nullable(),
   attempts: z.number(), externalId: z.string().nullable(), externalUrl: z.string().nullable(), error: z.string().nullable(),
+  approvedAt: z.string().nullable(), approvedBy: z.string().nullable(),
 });
 const UI_STATUSES = ["draft", "linted", "approved", "archived"] as const;
 const creativeSchema = z.object({
@@ -137,7 +144,8 @@ export const rpcContract = defineRpcContract({
     output: entrySchema,
   },
   calendar_unapprove: { input: z.object({ id: z.string() }), output: entrySchema },
-  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000) }), output: entrySchema },
+  calendar_published: { input: z.object({ id: z.string(), externalId: z.string().trim().min(1).max(200), url: z.string().max(2000).nullable().optional() }), output: entrySchema },
+  calendar_request_changes: { input: z.object({ id: z.string(), note: z.string().trim().min(1).max(2000), reason: z.enum(REVIEW_REASONS).nullable().optional() }), output: entrySchema },
   calendar_decide: { input: z.object({ id: z.string(), decision: z.enum(["approve", "cancel"]) }), output: entrySchema },
   creatives_list: { input: z.null(), output: z.object({ creatives: z.array(creativeSchema) }) },
   creatives_upload: {
@@ -234,6 +242,16 @@ export default async function plugin(bb: BbPluginApi) {
       resendWebhookSecret: { type: "string", label: "Resend webhook signing secret", description: "whsec_... of the webhook that points at /api/v1/plugins/brandwise/http/webhooks/email/resend.", default: "", secret: true },
       telegramBotToken: { type: "string", label: "Telegram bot token", description: "From @BotFather. Switches the telegram channel on; each campaign picks its chat (campaign channel set telegram chatId=...).", default: "", secret: true },
     }),
+    section("links", "Short links", "Own short links in posts, so clicks are counted per calendar entry in channels that do not report them (docs/analytics.md).", {
+      linksBaseUrl: { type: "string", label: "Public address", description: "Where the internet reaches this plugin's route /api/v1/plugins/brandwise/http/l, e.g. https://go.example.com/l behind a tunnel or proxy. Empty = links in posts are tagged but not shortened, and their clicks are not counted. Links stop working when the encryption key is replaced.", default: "" },
+    }),
+    section("site", "Web analytics", "Visits and leads on the client's own site per calendar entry, read from Google Analytics 4 by utm_content (docs/analytics.md).", {
+      ga4ServiceAccount: { type: "string", label: "GA4 service account key", description: "The JSON key file of a Google service account with the Analytics Data API enabled. Each client adds its client_email to their GA4 property as a Viewer; the property is named per brand (campaign channel set site propertyId=<id> leadEvents=generate_lead). Empty = no site numbers.", default: "", secret: true },
+    }),
+    section("ads", "Ads", "Reports of ads run on the platforms, read only: impressions, reach, link clicks and spend per calendar entry (docs/analytics.md). Nothing here can buy or change an ad.", {
+      metaAccessToken: { type: "string", label: "Meta access token", description: "A system-user token with the ads_read permission on the clients' ad accounts (Business Settings > System users). An ad is an entry on channel meta_ads, marked published with its ad id. Empty = no Meta numbers.", default: "", secret: true },
+      metaApiVersion: { type: "string", label: "Meta API version", description: "Graph API version, e.g. v23.0. Meta retires a version about two years after its release.", default: "v23.0" },
+    }),
     section("database", "Database", "Where campaigns, the calendar and asset records live.", {
       databaseUrl: { type: "string", label: "Postgres URL", default: "", secret: true },
     }),
@@ -294,11 +312,37 @@ export default async function plugin(bb: BbPluginApi) {
     pool: core.pool, salt: emailSalt, providers: { resendApiKey: cfg.resendApiKey || undefined, resendWebhookSecret: cfg.resendWebhookSecret || undefined },
     sim: cfg.simEnabled ? { now: async () => new Date(Date.now() + (await regulatorStore(core!.pool).clockOffset()) * 1000) } : undefined,
   });
+  // Own short links in posts (core/links): the redirect below counts each click for its entry. The key signs codes and salts visitors.
+  const links = core === null ? null : createLinks({
+    pool: core.pool, key: createHmac("sha256", cfg.secretKey).update("brandwise-links").digest("hex"),
+    baseUrl: () => cfg.linksBaseUrl.trim().replace(/\/+$/, "") || null, channels: SHORTENED_CHANNELS,
+  });
+  // Numbers of calendar entries from every source (core/metrics): e-mail and short links, more channels with each source (docs/analytics.md).
+  // GA4 reads the client's site (visits, key events as leads) per entry; it is asked by `metrics pull`, hourly from an automation.
+  const ga4 = core === null ? null : ga4Source({
+    credentials: () => (cfg.ga4ServiceAccount.trim() ? parseServiceAccount(cfg.ga4ServiceAccount) : null),
+    targetOf: (campaignId) => need().channels.get(campaignId, "site"),
+  });
+  // Meta ads, read only: lifetime insights per ad id, asked by `metrics pull`.
+  const meta = metaAdsSource({ token: () => cfg.metaAccessToken.trim() || null, version: () => cfg.metaApiVersion.trim() || "v23.0" });
+  const metrics = core === null ? null : createMetrics({ core, sources: [...(email ? [email.metricsSource()] : []), meta, ...(links ? [links.metricsSource()] : []), ...(ga4 ? [ga4] : [])] });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
-  const regulator = core !== null && email !== null ? createRegulator({ core, email, library: () => emailTemplates.library() }) : null;
+  const regulator = core !== null && metrics !== null ? createRegulator({ core, metrics, library: () => emailTemplates.library() }) : null;
   const editorCli = createEditorCli({ core: need, regulator: () => regulator });
+  const metricsCli = createMetricsCli({ core: need, metrics: () => metrics, links: () => links, now: async () => (regulator ? regulator.clock.now() : new Date()) });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
-  const allConnectors = () => [...connectorsFrom(cfg), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
+  const allConnectors = () => [...connectorsFrom(cfg, { shorten: links?.enabled() ? links.shorten : undefined }), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
+  // The short-link redirect. Public by nature, so no bb login: a code carries our signature, a code we did not issue is a 404, and the
+  // target is only ever a URL we stored when publishing (no open redirect). Previews and crawlers are recorded as bots, not clicks.
+  for (const method of ["GET", "HEAD"]) {
+    bb.http.route(method, "/l", async (ctx) => {
+      // only the entry our own proxy appended; anything left of it is the client's to forge
+      const ip = clientAddress(ctx.req.header("x-forwarded-for"));
+      const url = links ? await links.resolve(ctx.req.query("c") ?? "", { method, userAgent: ctx.req.header("user-agent") ?? null, ip }).catch(() => null) : null;
+      if (url === null) return new Response("This link does not exist.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+      return new Response(null, { status: 302, headers: { location: url, "cache-control": "no-store", "referrer-policy": "no-referrer-when-downgrade" } });
+    }, { auth: "none" });
+  }
   for (const p of email?.providers ?? []) {
     if (!p.events) continue;
     // the provider signs each call, so the route needs no bb login (a signature failure stores nothing)
@@ -537,22 +581,27 @@ export default async function plugin(bb: BbPluginApi) {
       return entry;
     },
     calendar_decide: async ({ id, decision }) => {
-      const entry = await need().calendar.decide(id, decision);
+      const entry = await need().calendar.decide(id, decision, "ui");
       await changed();
       return entry;
     },
     calendar_update: async ({ id, ...patch }) => {
-      const entry = await need().calendar.update(id, patch);
+      const entry = await need().calendar.update(id, patch, "ui");
+      await changed();
+      return entry;
+    },
+    calendar_published: async ({ id, externalId, url }) => {
+      const entry = await need().publishing.publishedByHand(id, { externalId, url: url || null }, "ui");
       await changed();
       return entry;
     },
     calendar_unapprove: async ({ id }) => {
-      const entry = await need().calendar.unapprove(id);
+      const entry = await need().calendar.unapprove(id, "ui");
       await changed();
       return entry;
     },
-    calendar_request_changes: async ({ id, note }) => {
-      const entry = await need().calendar.requestChanges(id, note);
+    calendar_request_changes: async ({ id, note, reason }) => {
+      const entry = await need().calendar.requestChanges(id, note, { actor: "ui", reason: reason ?? null });
       await changed();
       return entry;
     },
@@ -722,17 +771,24 @@ export default async function plugin(bb: BbPluginApi) {
 
   const usage = [
     "Usage:",
-    "  bb brandwise campaign channel set <channel> <key>=<value>... | unset <channel> | list [--campaign <c>]   (where the campaign publishes, e.g. telegram chatId=@mychannel; a parent campaign's target applies when the campaign has none)",
+    "  bb brandwise campaign channel set <channel> <key>=<value>... | unset <channel> | list [--campaign <c>]   (where the campaign publishes, e.g. telegram chatId=@mychannel; site propertyId=<GA4 id> leadEvents=generate_lead names the brand's analytics; a parent campaign's target applies when the campaign has none)",
     "  bb brandwise campaign list|add <name> --kind <always_on|campaign> [--parent <campaign>] [--from <date>] [--to <date>]",
     "  bb brandwise campaign assign <thread-id> <campaign> | campaign unassign <thread-id>   (link a bb thread to a campaign)",
     "  bb brandwise calendar list [--campaign <c>]",
     "  bb brandwise calendar add <title> --channel <c> --at <ISO date> --tier <1|2|3> [--campaign <c>] [--asset <id>] [--body <text>] [--link <url>]",
     "  bb brandwise calendar edit <id> [--title <t>] [--body <text>] [--link <url>] [--channel <c>] [--at <ISO date>] [--asset <id>]",
-    "  bb brandwise calendar request-changes <id> <note>",
+    "  bb brandwise calendar request-changes <id> <note> [--reason claims|facts|tone|brand|visual|legal|typo|offer|other]",
+    "  bb brandwise calendar published <id> --external <platform id> [--url <url>]   (an entry waiting to be published by hand was published: where it is, e.g. the ad id of a meta_ads entry)",
+    "  bb brandwise calendar tagged-link <id>   (the entry's link with its UTM tags, to use when publishing by hand)",
+    "  bb brandwise calendar history <id>   (every action on the entry: who, when, the send-back notes and reasons)",
     "  bb brandwise calendar unapprove <id>   (upcoming approved entry back to pending_approval; entries whose time has passed accept no action)",
     "  bb brandwise calendar approve|cancel <id>",
+    "  (calendar add, edit, request-changes, unapprove, approve and cancel take [--as <label>]: the history records cli:<label>)",
+    "  bb brandwise metrics sources | entry <id> | campaign [--campaign <c>] [--as-of <ISO>]   (numbers of published entries from every source, any channel; unknown is shown as missing, never 0)",
+    "  bb brandwise metrics links <entry>   (our short links of a published post: where each leads, clicks, unique visitors, bot requests)",
+    "  bb brandwise metrics pull [--source <id>] [--days 30]   (ask pull sources for current totals of entries published in the last days and store them; safe to repeat)",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
-    "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on e-mail; the rails judge, nobody can overrule)",
+    "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on any channel a metrics source measures with exposures and clicks; the rails judge, nobody can overrule)",
     "  bb brandwise editor journal read [--limit n] | write \"<text>\" [--kind note]",
     "  bb brandwise editor tasks list [--status s] | create --kind <k> --brief \"...\" [--params '<json>'] | claim <id> | submit <id> --subject \"...\" [--content '<json slots to change>'] | complete <id> [--result '<json>']",
     "  bb brandwise editor goals [set <metric> <value> --kind target|limit] | unfreeze   (goals and unfreeze are a person's commands)",
@@ -770,8 +826,19 @@ export default async function plugin(bb: BbPluginApi) {
   ].join("\n");
   const vals = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const val = (argv: string[], name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
-  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml"]);
+  const FLAGS_WITH_VALUE = new Set(["--kind", "--parent", "--from", "--to", "--campaign", "--channel", "--at", "--tier", "--asset", "--role", "--origin", "--provenance", "--seconds", "--status", "--prompt", "--model", "--aspect", "--resolution", "--max-credits", "--name", "--ref", "--wait-seconds", "--dir", "--props", "--props-file", "--frame", "--template", "--composition", "--title", "--body", "--link", "--file", "--provider", "--cookies", "--start-image", "--end-image", "--video-ref", "--audio-ref", "--duration", "--param", "--limit", "--a", "--b", "--hypothesis", "--as-of", "--brief", "--params", "--result", "--as", "--subject", "--target", "--width", "--note", "--content", "--content-file", "--locale", "--version", "--brand", "--mjml", "--reason", "--source", "--days", "--external", "--url"]);
   const KNOWN_FLAGS = new Set([...FLAGS_WITH_VALUE, "--json", "--ai", "--stop", "--video", "--image", "--raw"]);
+  /**
+   * Who did it, as recorded in the entry's history: always "cli" or "cli:<label>" from the CLI. `--as` is a label agents give
+   * themselves, not an identity, so it can never claim a reserved actor ("ui" is a person on a page, "auto" and "scheduler" are code).
+   */
+  const RESERVED_ACTORS = new Set(["ui", "auto", "scheduler", "unknown"]);
+  const cliActor = (args: string[]) => {
+    const label = val(args, "--as")?.trim();
+    if (!label) return "cli";
+    if (RESERVED_ACTORS.has(label.toLowerCase())) throw new Error(`--as ${label} is reserved: it names a person on a page or the system`);
+    return `cli:${label.slice(0, 40)}`;
+  };
   /** Positional args = argv without flags and their values. */
   const positional = (argv: string[]) => argv.filter((a, i) => !a.startsWith("--") && !FLAGS_WITH_VALUE.has(argv[i - 1] ?? ""));
   const fmtEntry = (e: { id: string; scheduledAt: string; channel: string; tier: number; status: string; campaignName: string; title: string; reviewNote?: string | null }) =>
@@ -1142,7 +1209,7 @@ export default async function plugin(bb: BbPluginApi) {
           const at = val(args, "--at");
           const tier = Number(val(args, "--tier"));
           if (!title || !channel || !at || ![1, 2, 3].includes(tier)) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: "cli" });
+          const e = await c.calendar.add({ campaignId: await campaign(), title, channel, scheduledAt: at, tier: tier as 1 | 2 | 3, assetId: val(args, "--asset") ?? null, body: val(args, "--body") ?? "", link: val(args, "--link") ?? null, createdBy: cliActor(args) });
           await changed();
           return reply(e, `Added ${fmtEntry(e)}`);
         }
@@ -1153,30 +1220,54 @@ export default async function plugin(bb: BbPluginApi) {
           const e = await c.calendar.update(id, {
             title: val(args, "--title"), body: val(args, "--body"), link: val(args, "--link"), channel: val(args, "--channel"),
             scheduledAt: at, assetId: val(args, "--asset"),
-          });
+          }, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "unapprove") {
           const id = positional(args.slice(2))[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.unapprove(id);
+          const e = await c.calendar.unapprove(id, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && action === "request-changes") {
           const [id, ...note] = positional(args.slice(2));
           if (!id || note.length === 0) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.requestChanges(id, note.join(" "));
+          const e = await c.calendar.requestChanges(id, note.join(" "), { actor: cliActor(args), reason: val(args, "--reason") ?? null });
           await changed();
           return reply(e, fmtEntry(e));
         }
         if (area === "calendar" && (action === "approve" || action === "cancel")) {
-          const id = rest[0];
+          const id = positional(args.slice(2))[0];
           if (!id) return { exitCode: 1, stderr: usage };
-          const e = await c.calendar.decide(id, action);
+          const e = await c.calendar.decide(id, action, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
+        }
+        if (area === "calendar" && action === "published") { // a person published a needs_manual entry by hand and says where
+          const id = positional(args.slice(2))[0], external = val(args, "--external");
+          if (!id || !external) return { exitCode: 1, stderr: usage };
+          const e = await c.publishing.publishedByHand(id, { externalId: external, url: val(args, "--url") ?? null }, cliActor(args));
+          await changed();
+          return reply(e, fmtEntry(e));
+        }
+        if (area === "calendar" && action === "tagged-link") { // the entry's link with its UTM tags, for publishing by hand (an ad, a post in an app)
+          const id = positional(args.slice(2))[0];
+          if (!id) return { exitCode: 1, stderr: usage };
+          const e = await c.calendar.get(id);
+          if (!e) return { exitCode: 1, stderr: `No calendar entry with id ${id}` };
+          if (!e.link) return { exitCode: 1, stderr: `Entry ${id} has no link (calendar edit ${id} --link <url>)` };
+          const paid = e.channel === META_CHANNEL;
+          const url = withUtm(e.link, { entryId: e.id, campaign: campaignSlug(e.campaignName), medium: paid ? "paid" : "social", source: paid ? "meta" : e.channel });
+          return reply({ url }, url);
+        }
+        if (area === "calendar" && action === "history") {
+          const id = positional(args.slice(2))[0];
+          if (!id) return { exitCode: 1, stderr: usage };
+          if (!(await c.calendar.get(id))) return { exitCode: 1, stderr: `No calendar entry with id ${id}` };
+          const h = await c.calendar.history(id);
+          return reply(h, h.map((x) => `${x.at.slice(0, 16)}  ${x.kind.padEnd(17)} ${x.actor.padEnd(12)} ${x.fromStatus ?? ""} -> ${x.toStatus ?? ""}${x.reason ? `  [${x.reason}]` : ""}${x.note ? `  ${x.note}` : ""}`).join("\n") || "No history.");
         }
         if (area === "assets" && action === "add") {
           const file = positional(args.slice(2))[0];
@@ -1348,6 +1439,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (area === "product") return productCli(c, action, args, { val, positional, reply, usage });
         if (area === "video") return video.cli(action, args, { val, positional, reply, usage });
         if (area === "editor") return editorCli.editor(action, args, { val, positional, reply, usage });
+        if (area === "metrics") return metricsCli(action, args, { val, positional, reply, usage });
         if (area === "sim") return editorCli.sim(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "rename") {
           const [id, ...nameParts] = positional(args.slice(2));

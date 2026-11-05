@@ -79,6 +79,8 @@ apply() {
    if [ -n "${RESEND_API_KEY:-}" ]; then cfg resendApiKey "$RESEND_API_KEY"; fi
    if [ -n "${RESEND_WEBHOOK_SECRET:-}" ]; then cfg resendWebhookSecret "$RESEND_WEBHOOK_SECRET"; fi
    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then cfg telegramBotToken "$TELEGRAM_BOT_TOKEN"; fi
+   # the public address of the short-link redirect (docs/analytics.md, step 3); unset = links in posts are not shortened
+   if [ -n "${LINKS_BASE_URL:-}" ]; then cfg linksBaseUrl "$LINKS_BASE_URL"; fi
    # optional video engine (agent-written Remotion templates); empty until its npm deps are installed
    if [ -f "$root/packages/video-remotion/node_modules/.package-lock.json" ]; then cfg videoEnginePath "$root/packages/video-remotion"; fi
    if [ -d "$root/packages/email-engine/node_modules/mjml" ]; then cfg emailEnginePath "$root/packages/email-engine"; fi
@@ -109,6 +111,11 @@ ensure_project() {
     echo "created project ${BW_PROJECT_NAME:-BrandWise} ($data_dir)"
   fi
 }
+# Pull sources (GA4, later ad and social platforms) only know current totals: an hourly pull stores a snapshot, so history builds up
+# (docs/analytics.md, step 2). Success prints nothing; a failing source exits 1 with its error.
+METRICS_NAME="BrandWise metrics"
+METRICS_SCRIPT='export BB_SERVER_URL="http://127.0.0.1:${BB_SERVER_PORT}" BB_CLI="${BB_CLI_DIR}/bb"
+"$BB_CLI" brandwise metrics pull >/dev/null'
 # ensure_automation <name> <cron> <script> <timeout in seconds>: created once, changed only when its definition changed.
 # bb renames an automation's script file on every update, adding a UUID to the name, so updating on every apply grows the name until
 # the file system refuses it (ENAMETOOLONG). So an unchanged automation is left alone, and one whose file name has grown long is
@@ -143,6 +150,7 @@ if a:
 ensure_scheduler() {
   ensure_project
   ensure_automation "$SCHEDULER_NAME" "* * * * *" "$SCHEDULER_SCRIPT" 90
+  ensure_automation "$METRICS_NAME" "17 * * * *" "$METRICS_SCRIPT" 300
 }
 
 tailnet_host() { tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'; }

@@ -103,6 +103,8 @@ A deterministic check (no LLM) of the entry's text against `claims.md`: numbers,
 
 ## 6. Metrics and feedback (flexible for all networks and sources)
 
+Being built as a stack of small steps, see `docs/analytics.md`.
+
 Goal: add a new network or data source without changing the schema.
 
 - **One narrow table** `metric_point(source, entity, metric, value, at, dims jsonb)`:

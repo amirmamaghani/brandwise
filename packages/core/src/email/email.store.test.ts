@@ -38,7 +38,7 @@ run("e-mail end to end, with a retry and a provider swap", async () => {
     const retried = (await runDue(core, [email.connector()], 50, [base.id])).find((o) => o.id === one.id);
     assert.deepEqual([retried?.result, a.campaigns.size], ["published", 1], "one campaign only");
     assert.match((await core.calendar.get(one.id))!.externalId ?? "", new RegExp(`^memory:${run}-a-`));
-    assert.ok([...a.campaigns.values()][0].html.includes("{{unsubscribe}}") && [...a.campaigns.values()][0].html.includes(`utm_campaign=${one.id}`));
+    assert.ok([...a.campaigns.values()][0].html.includes("{{unsubscribe}}") && [...a.campaigns.values()][0].html.includes(`utm_content=${one.id}`));
 
     // 2) events come back: stored once, duplicates ignored, statistics are ours
     const r1 = await ingest(a.outbox, email.store);

@@ -25,10 +25,13 @@ export type Connector = {
 
 /** Connectors that are configured. A connector without credentials is left out, so its channel ends up as `needs_manual`. */
 export type ConnectorConfig = { telegramBotToken?: string };
-export const connectorsFrom = (cfg: ConnectorConfig = {}): Connector[] => [
+/** `shorten` turns a link of an entry into our own short link (src/links), so channels without click data of their own get it. */
+export const connectorsFrom = (cfg: ConnectorConfig = {}, extras: { shorten?: (entryId: string, url: string) => Promise<string> } = {}): Connector[] => [
   mock,
-  ...(cfg.telegramBotToken ? [telegram({ token: cfg.telegramBotToken })] : []),
+  ...(cfg.telegramBotToken ? [telegram({ token: cfg.telegramBotToken, shorten: extras.shorten })] : []),
 ];
+/** Channels whose connectors take `shorten`: the channels the short-link source measures. */
+export const SHORTENED_CHANNELS = ["telegram"] as const;
 
 export type Outcome = { id: string; title: string; channel: string; result: "published" | "retry" | "failed" | "needs_manual"; detail: string };
 

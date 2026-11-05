@@ -14,6 +14,7 @@ import { createEmail } from "../email/index.ts";
 import { createTemplates } from "../email/templates/index.ts";
 import { createLibrary, type Library } from "../email/templates/library.ts";
 import { SEED_SAMPLE } from "../email/templates/seed.ts";
+import { createMetrics } from "../metrics/index.ts";
 import { createRegulator } from "./index.ts";
 import { regulatorStore } from "./store.ts";
 
@@ -36,7 +37,7 @@ run("an experiment can vary a slot of a published template", async () => {
     const root = mkdtempSync(join(tmpdir(), "bw-exp-"));
     const templates = createTemplates({ root: () => root, renderer: () => passThrough, preview: () => { throw new Error("none"); }, assets, dialectOf, resolve: (c) => library.resolve(c) });
     library = createLibrary({ pool: core.pool, core, templates, renderer: () => passThrough, assets, dialectOf });
-    const reg = createRegulator({ core, email, library: () => library });
+    const reg = createRegulator({ core, metrics: createMetrics({ core, sources: [email.metricsSource()] }), library: () => library });
 
     const base = await core.campaigns.add({ name: `${prefix}-base`, kind: "always_on" });
     await library.brand.set(base.id, { name: "Client", colors: { primary: "#0b57d0", text: "#1f2937", background: "#f3f4f6" }, footer: { company: "Client Ltd", address: "Road 1, Town" } });

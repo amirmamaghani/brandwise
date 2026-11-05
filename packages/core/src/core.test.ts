@@ -77,6 +77,23 @@ run("campaigns, calendar and assets round-trip", async () => {
     const again = await core.calendar.update(draft.id, { body: "Short" });
     assert.deepEqual([again.status, again.reviewNote], ["pending_approval", null]);
 
+    // the history keeps what the entry itself forgets: the send-back note and reason, who approved and who withdrew (docs/analytics.md, D4)
+    await assert.rejects(core.calendar.requestChanges(draft.id, "x", { reason: "vibes" }), /Unknown reason/);
+    await core.calendar.requestChanges(draft.id, "No claims without a source", { actor: "ui", reason: "claims" });
+    await core.calendar.update(draft.id, { body: "Sourced" }, "cli:author");
+    const approved = await core.calendar.decide(draft.id, "approve", "ui");
+    assert.deepEqual([approved.approvedBy, typeof approved.approvedAt], ["ui", "string"]);
+    const withdrawn = await core.calendar.unapprove(draft.id, "cli");
+    assert.deepEqual([withdrawn.approvedBy, withdrawn.approvedAt], [null, null], "a withdrawn approval is no approval");
+    const history = await core.calendar.history(draft.id);
+    assert.deepEqual(history.map((h) => [h.kind, h.actor, h.toStatus]), [
+      ["created", "unknown", "pending_approval"], ["changes_requested", "unknown", "changes_requested"], ["edited", "unknown", "pending_approval"],
+      ["changes_requested", "ui", "changes_requested"], ["edited", "cli:author", "pending_approval"], ["approved", "ui", "approved"], ["unapproved", "cli", "pending_approval"],
+    ]);
+    assert.deepEqual([history[1].note, history[3].note, history[3].reason], ["Shorter caption", "No claims without a source", "claims"], "both send-back notes survive the edits");
+    assert.deepEqual(history[4].data, { fields: ["body"] });
+    assert.deepEqual([t1.approvedBy, (await core.calendar.history(t1.id))[0].toStatus], ["auto", "approved"], "tier 1 is approved by the system");
+
     const png = Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"), Buffer.from([0, 0, 4, 56, 0, 0, 5, 70]), Buffer.from(tag)]);
     const a = await core.assets.save({ campaignId: campaign.id, bytes: png, filename: "x.png", role: "creative", origin: "generated", aiGenerated: true, provenance: { model: "test" } });
     const b = await core.assets.save({ campaignId: campaign.id, bytes: png, filename: "x.png", role: "creative", origin: "generated" });

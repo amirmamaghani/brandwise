@@ -10,6 +10,7 @@ import type { EmailProvider } from "./domain/ports.ts";
 import type { Recipient } from "./domain/types.ts";
 import { simProvider } from "./adapters/sim.ts";
 import { emailConnector } from "./connector.ts";
+import { emailMetricsSource } from "./metrics-source.ts";
 import { pgEmailStore } from "./store.ts";
 
 /** Salted hash of an address: stable for one installation (so uniques work) and useless elsewhere. The salt is a secret of the plugin. */
@@ -34,6 +35,8 @@ export function createEmail(deps: { pool: pg.Pool; salt: string; providers?: Omi
     recipient,
     /** `renderIdFor` links a send to the render snapshot of a template-based entry (from the template library). */
     connector: (renderIdFor?: (entryId: string) => Promise<string | null>): Connector => emailConnector(providers, store, renderIdFor),
+    /** E-mail as a source of the metrics service (docs/analytics.md, step 2). */
+    metricsSource: () => emailMetricsSource(store),
     /** A webhook call: verify, parse, store. A bad signature throws and nothing is stored. */
     webhook: async (providerId: string, req: { headers: Record<string, string | undefined>; body: string }) => ingest(provider(providerId).parseWebhook(req), store),
     /** Replay a saved payload (trusted: no signature check). */
