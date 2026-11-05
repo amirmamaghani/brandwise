@@ -54,7 +54,7 @@ export function createMetricsCli(deps: { core: () => Core; metrics: () => Metric
       if (!l) return { exitCode: 1, stderr: "Short links need the database" };
       const rows = await l.stats(id);
       const off = l.enabled() ? "" : "\nShort links are off: set the public address under Settings > Short links.";
-      return reply(rows, (rows.map((r) => `${String(r.visitors).padStart(5)} visitors  ${String(r.clicks).padStart(5)} clicks  ${String(r.bots).padStart(4)} bots  ${r.url}`).join("\n") || "No short links for this entry.") + off);
+      return reply(rows, (rows.map((r) => `${String(r.visitors).padStart(5)} visitors  ${String(r.clicks).padStart(5)} clicks  ${String(r.bots).padStart(4)} bots  ${r.short ?? "(not shortened)"}  ->  ${r.url}`).join("\n") || "No short links for this entry.") + off);
     }
     if (action === "pull") {
       const days = val(args, "--days");

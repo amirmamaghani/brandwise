@@ -15,7 +15,9 @@ import { productCli } from "./product.ts";
 import { createVideo, videoContract } from "./video.ts";
 import { createEmailTemplates, templatesContract } from "./email-templates.ts";
 import { sleep, slug } from "./util.ts";
-import { connectorsFrom, runDue, SHORTENED_CHANNELS } from "./core/publish.ts";
+import { connectorsFrom, runDue, SHORTENED_CHANNELS, type ScopedTokens } from "./core/publish.ts";
+import { metaStatus } from "./core/connector-meta.ts";
+import { createConnections } from "./connect.ts";
 import { clientAddress, createLinks } from "./core/links/index.ts";
 import { ga4Source, parseServiceAccount } from "./core/site/ga4.ts";
 import { META_CHANNEL, metaAdsSource } from "./core/ads/meta.ts";
@@ -242,6 +244,18 @@ export default async function plugin(bb: BbPluginApi) {
       resendWebhookSecret: { type: "string", label: "Resend webhook signing secret", description: "whsec_... of the webhook that points at /api/v1/plugins/brandwise/http/webhooks/email/resend.", default: "", secret: true },
       telegramBotToken: { type: "string", label: "Telegram bot token", description: "From @BotFather. Switches the telegram channel on; each campaign picks its chat (campaign channel set telegram chatId=...).", default: "", secret: true },
     }),
+    section("social", "Social channels", "Accounts the BrandWise posts to. One token per platform, set by a person (docs/channels.md); each campaign picks its Page or account with a channel target.", {
+      metaPublishToken: { type: "string", label: "Meta publish token", description: "A system-user token of the client's business with pages_manage_posts, pages_read_engagement, instagram_basic and instagram_content_publish on its Pages and Instagram accounts. Switches the facebook and instagram channels on; `bb brandwise meta test` lists the Pages and accounts and their ids for the campaign targets.", default: "", secret: true },
+      tiktokClientKey: { type: "string", label: "TikTok client key", description: "Of the app on developers.tiktok.com with the Content Posting API (Direct Post). With the secret it switches the tiktok channel on; each campaign then connects its creator account with `bb brandwise tiktok connect`. The app's redirect URI must be <public address>/oauth/tiktok.", default: "" },
+      tiktokClientSecret: { type: "string", label: "TikTok client secret", description: "Of the same app.", default: "", secret: true },
+      youtubeClientId: { type: "string", label: "Google OAuth client id", description: "Of a Web application client in Google Cloud with the YouTube Data API v3 enabled. With the secret it switches the youtube channel on; each campaign then connects its channel with `bb brandwise youtube connect`. The client's redirect URI must be http://localhost:<this bb's port>/api/v1/plugins/brandwise/http/oauth/youtube.", default: "" },
+      youtubeClientSecret: { type: "string", label: "Google OAuth client secret", description: "Of the same client.", default: "", secret: true },
+      threadsAppId: { type: "string", label: "Threads app id", description: "Of a Meta app with the Threads use case (App settings > Basic: the Threads app id, not the Meta app id). With the secret it switches the threads channel on; each campaign then connects its account with `bb brandwise threads connect`. The app's redirect URI must be <public address>/oauth/threads.", default: "" },
+      threadsAppSecret: { type: "string", label: "Threads app secret", description: "Of the same app.", default: "", secret: true },
+      linkedinClientId: { type: "string", label: "LinkedIn client id", description: "Of an app on developer.linkedin.com with the products Share on LinkedIn and Sign In with LinkedIn using OpenID Connect. With the secret it switches the linkedin channel on; each campaign then connects a member with `bb brandwise linkedin connect`. The app's redirect URL must be <public address>/oauth/linkedin.", default: "" },
+      linkedinClientSecret: { type: "string", label: "LinkedIn client secret", description: "Of the same app.", default: "", secret: true },
+      linkedinApiVersion: { type: "string", label: "LinkedIn API version", description: "The Linkedin-Version month (YYYYMM) every call names. LinkedIn retires a version about a year after its release; move to a newer one before that.", default: "202610" },
+    }),
     section("links", "Short links", "Own short links in posts, so clicks are counted per calendar entry in channels that do not report them (docs/analytics.md).", {
       linksBaseUrl: { type: "string", label: "Public address", description: "Where the internet reaches this plugin's route /api/v1/plugins/brandwise/http/l, e.g. https://go.example.com/l behind a tunnel or proxy. Empty = links in posts are tagged but not shortened, and their clicks are not counted. Links stop working when the encryption key is replaced.", default: "" },
     }),
@@ -331,7 +345,23 @@ export default async function plugin(bb: BbPluginApi) {
   const editorCli = createEditorCli({ core: need, regulator: () => regulator });
   const metricsCli = createMetricsCli({ core: need, metrics: () => metrics, links: () => links, now: async () => (regulator ? regulator.clock.now() : new Date()) });
   /** Every publishing connector that is switched on. A channel without one waits as "Publish by hand". */
-  const allConnectors = () => [...connectorsFrom(cfg, { shorten: links?.enabled() ? links.shorten : undefined }), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
+  // Accounts connected over OAuth (TikTok, YouTube): their refresh tokens are scoped secret settings of the campaign (docs/channels.md).
+  const tokens: ScopedTokens = {
+    get: async (campaignId, key) => { const r = await need().settings.resolve(campaignId, key); return r && r.scope !== "default" && typeof r.value === "string" && r.value ? r.value : null; },
+    set: async (campaignId, key, value) => { const c = need(); const r = await c.settings.resolve(campaignId, key); await c.settings.set(r && r.scope !== "default" ? r.scope : campaignId, key, value); },
+  };
+  const tiktokApp = () => (cfg.tiktokClientKey.trim() && cfg.tiktokClientSecret.trim() ? { clientKey: cfg.tiktokClientKey.trim(), clientSecret: cfg.tiktokClientSecret.trim(), tokens } : null);
+  const youtubeApp = () => (cfg.youtubeClientId.trim() && cfg.youtubeClientSecret.trim() ? { clientId: cfg.youtubeClientId.trim(), clientSecret: cfg.youtubeClientSecret.trim(), tokens } : null);
+  const threadsApp = () => (cfg.threadsAppId.trim() && cfg.threadsAppSecret.trim() ? { appId: cfg.threadsAppId.trim(), appSecret: cfg.threadsAppSecret.trim(), tokens } : null);
+  const linkedinApp = () => (cfg.linkedinClientId.trim() && cfg.linkedinClientSecret.trim() ? { clientId: cfg.linkedinClientId.trim(), clientSecret: cfg.linkedinClientSecret.trim(), version: cfg.linkedinApiVersion.trim() || undefined, tokens } : null);
+  const connections = createConnections({
+    core: need, kv: bb.storage.kv, loopbackBaseUrl: () => bb.server.loopbackBaseUrl,
+    publicBaseUrl: () => cfg.linksBaseUrl.trim().replace(/\/+$/, "").replace(/\/l$/, "") || null,
+    tiktok: tiktokApp, youtube: youtubeApp, threads: threadsApp, linkedin: linkedinApp,
+  });
+  // the platforms' return addresses: public by nature (the one-time state in the query is what ties a callback to a campaign)
+  for (const id of connections.platforms) bb.http.route("GET", `/oauth/${id}`, (ctx) => connections.callback(id, { query: (name) => ctx.req.query(name) }), { auth: "none" });
+  const allConnectors = () => [...connectorsFrom(cfg, { shorten: links?.enabled() ? links.shorten : undefined, tokens }), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
   // The short-link redirect. Public by nature, so no bb login: a code carries our signature, a code we did not issue is a 404, and the
   // target is only ever a URL we stored when publishing (no open redirect). Previews and crawlers are recorded as bots, not clicks.
   for (const method of ["GET", "HEAD"]) {
@@ -786,6 +816,11 @@ export default async function plugin(bb: BbPluginApi) {
     "  (calendar add, edit, request-changes, unapprove, approve and cancel take [--as <label>]: the history records cli:<label>)",
     "  bb brandwise metrics sources | entry <id> | campaign [--campaign <c>] [--as-of <ISO>]   (numbers of published entries from every source, any channel; unknown is shown as missing, never 0)",
     "  bb brandwise metrics links <entry>   (our short links of a published post: where each leads, clicks, unique visitors, bot requests)",
+    "  bb brandwise meta test [--campaign <c>]   (is the Meta token valid, which Facebook Pages and Instagram accounts it can post to with their ids, and are the campaign's facebook/instagram targets among them)",
+    "  bb brandwise tiktok connect [--campaign <c>] [--redirect <https url>] | status [--campaign <c>]   (a person connects the campaign's TikTok creator account by signing in; status shows the account, what privacy TikTok allows it, the target)",
+    "  bb brandwise youtube connect [--campaign <c>] [--redirect <url>] | status [--campaign <c>]   (a person connects the campaign's YouTube channel by signing in with Google; the target may add privacy=unlisted)",
+    "  bb brandwise threads connect [--campaign <c>] [--redirect <https url>] | status [--campaign <c>]   (a person connects the campaign's Threads account by signing in; the 60-day token is renewed at each post)",
+    "  bb brandwise linkedin connect [--campaign <c>] [--redirect <https url>] | status [--campaign <c>]   (a person connects the campaign's LinkedIn member by signing in; the token lives 60 days, status shows the days left)",
     "  bb brandwise metrics pull [--source <id>] [--days 30]   (ask pull sources for current totals of entries published in the last days and store them; safe to repeat)",
     "  bb brandwise editor signals [--campaign <c>] [--as-of <ISO>]   (what the editor sees: goals, smoothed rates, experiments, what is allowed now)",
     "  bb brandwise editor experiments list|propose --a <entry> --b <entry> --hypothesis \"...\"|evaluate <id>   (A/B on any channel a metrics source measures with exposures and clicks; the rails judge, nobody can overrule)",
@@ -1103,6 +1138,11 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "calendar", summary: "List, add, edit, send back, approve, withdraw approval of or cancel calendar entries", usage: "bb brandwise calendar list|add|edit|request-changes|unapprove|approve|cancel|run-due ..." },
       { name: "assets", summary: "Add, download (Instagram, TikTok, YouTube), list or sign assets stored in S3", usage: "bb brandwise assets add|download|download-photos|download-videos|list|url ..." },
       { name: "instagram", summary: "Check that the Instagram connection used for downloads works", usage: "bb brandwise instagram test" },
+      { name: "meta", summary: "Check the Meta publish token: the Facebook Pages and Instagram accounts it can post to", usage: "bb brandwise meta test [--campaign <c>]" },
+      { name: "tiktok", summary: "Connect a campaign's TikTok creator account (a person signs in) or show it", usage: "bb brandwise tiktok connect|status --campaign <c>" },
+      { name: "youtube", summary: "Connect a campaign's YouTube channel (a person signs in with Google) or show it", usage: "bb brandwise youtube connect|status --campaign <c>" },
+      { name: "threads", summary: "Connect a campaign's Threads account (a person signs in) or show it", usage: "bb brandwise threads connect|status --campaign <c>" },
+      { name: "linkedin", summary: "Connect a campaign's LinkedIn member (a person signs in) or show it", usage: "bb brandwise linkedin connect|status --campaign <c>" },
       { name: "doctor", summary: "Check that the host tools BrandWise needs are installed", usage: "bb brandwise doctor" },
       { name: "config", summary: "Provider, account and limits per scope (global or campaign)", usage: "bb brandwise config list|set|unset ..." },
       { name: "providers", summary: "Check that the account of a scope is signed in at each provider", usage: "bb brandwise providers status ..." },
@@ -1343,6 +1383,15 @@ export default async function plugin(bb: BbPluginApi) {
           const r = await instagramTest(c, scope);
           return reply(r, `${r.ok ? "ok" : "NOT ok"}  ${r.detail}${r.ok ? "" : `\nThe user connects Instagram under Settings > Providers > Downloads (${NEEDS_SESSION}).`}`);
         }
+        if (area === "meta" && action === "test") { // for the person connecting Facebook and Instagram (docs/channels.md)
+          const token = cfg.metaPublishToken.trim();
+          if (!token) return { exitCode: 1, stderr: "No Meta publish token: a person sets it under Settings > Social channels (docs/channels.md)" };
+          const ref = val(args, "--campaign");
+          const scope = ref ? (await c.campaigns.resolve(ref)).id : null;
+          const targets = scope === null ? null : { facebook: await c.channels.get(scope, "facebook"), instagram: await c.channels.get(scope, "instagram") };
+          const r = await metaStatus({ token, version: cfg.metaApiVersion.trim() || undefined }, targets);
+          return reply(r, r.lines.join("\n"));
+        }
         if (area === "doctor") {
           const env = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ""}` };
           const probe = (bin: string, arg: string) => new Promise<string | null>((resolve) =>
@@ -1440,6 +1489,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (area === "video") return video.cli(action, args, { val, positional, reply, usage });
         if (area === "editor") return editorCli.editor(action, args, { val, positional, reply, usage });
         if (area === "metrics") return metricsCli(action, args, { val, positional, reply, usage });
+        if (area === "tiktok" || area === "youtube" || area === "threads" || area === "linkedin") return connections.cli(area, action, args, { val, positional, reply, usage });
         if (area === "sim") return editorCli.sim(action, args, { val, positional, reply, usage });
         if (area === "assets" && action === "rename") {
           const [id, ...nameParts] = positional(args.slice(2));

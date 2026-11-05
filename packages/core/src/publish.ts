@@ -4,6 +4,11 @@
 import type { CalendarEntry, Core } from "./index.ts";
 import { mock } from "./connector-mock.ts";
 import { telegram } from "./connector-telegram.ts";
+import { meta } from "./connector-meta.ts";
+import { tiktok } from "./connector-tiktok.ts";
+import { youtube } from "./connector-youtube.ts";
+import { threads } from "./connector-threads.ts";
+import { linkedin } from "./connector-linkedin.ts";
 
 export type PublishInput = {
   /** Stable per entry: the platform (or the connector) drops a second publish with the same key. */
@@ -24,14 +29,36 @@ export type Connector = {
 };
 
 /** Connectors that are configured. A connector without credentials is left out, so its channel ends up as `needs_manual`. */
-export type ConnectorConfig = { telegramBotToken?: string };
-/** `shorten` turns a link of an entry into our own short link (src/links), so channels without click data of their own get it. */
-export const connectorsFrom = (cfg: ConnectorConfig = {}, extras: { shorten?: (entryId: string, url: string) => Promise<string> } = {}): Connector[] => [
+export type ConnectorConfig = {
+  telegramBotToken?: string;
+  metaPublishToken?: string; metaApiVersion?: string;
+  tiktokClientKey?: string; tiktokClientSecret?: string;
+  youtubeClientId?: string; youtubeClientSecret?: string;
+  threadsAppId?: string; threadsAppSecret?: string;
+  linkedinClientId?: string; linkedinClientSecret?: string; linkedinApiVersion?: string;
+};
+/**
+ * Per-campaign secrets of connected accounts (OAuth refresh tokens), kept as scoped settings: a campaign's own, else its parent's.
+ * `set` writes where the value was found, so a token a platform rotates stays at the scope it was connected at.
+ */
+export type ScopedTokens = { get(campaignId: string, key: string): Promise<string | null>; set(campaignId: string, key: string, value: string): Promise<void> };
+export type ConnectorExtras = {
+  /** Turns a link of an entry into our own short link (src/links), so channels without click data of their own get it. */
+  shorten?: (entryId: string, url: string) => Promise<string>;
+  /** Needed by connectors whose accounts are connected over OAuth (TikTok, YouTube); without it those stay off. */
+  tokens?: ScopedTokens;
+};
+export const connectorsFrom = (cfg: ConnectorConfig = {}, extras: ConnectorExtras = {}): Connector[] => [
   mock,
   ...(cfg.telegramBotToken ? [telegram({ token: cfg.telegramBotToken, shorten: extras.shorten })] : []),
+  ...(cfg.metaPublishToken ? meta({ token: cfg.metaPublishToken, version: cfg.metaApiVersion, shorten: extras.shorten }) : []),
+  ...(cfg.tiktokClientKey && cfg.tiktokClientSecret && extras.tokens ? [tiktok({ clientKey: cfg.tiktokClientKey, clientSecret: cfg.tiktokClientSecret, tokens: extras.tokens, shorten: extras.shorten })] : []),
+  ...(cfg.youtubeClientId && cfg.youtubeClientSecret && extras.tokens ? [youtube({ clientId: cfg.youtubeClientId, clientSecret: cfg.youtubeClientSecret, tokens: extras.tokens, shorten: extras.shorten })] : []),
+  ...(cfg.threadsAppId && cfg.threadsAppSecret && extras.tokens ? [threads({ appId: cfg.threadsAppId, appSecret: cfg.threadsAppSecret, tokens: extras.tokens, shorten: extras.shorten })] : []),
+  ...(cfg.linkedinClientId && cfg.linkedinClientSecret && extras.tokens ? [linkedin({ clientId: cfg.linkedinClientId, clientSecret: cfg.linkedinClientSecret, version: cfg.linkedinApiVersion, tokens: extras.tokens, shorten: extras.shorten })] : []),
 ];
 /** Channels whose connectors take `shorten`: the channels the short-link source measures. */
-export const SHORTENED_CHANNELS = ["telegram"] as const;
+export const SHORTENED_CHANNELS = ["telegram", "facebook", "instagram", "tiktok", "youtube", "threads", "linkedin"] as const;
 
 export type Outcome = { id: string; title: string; channel: string; result: "published" | "retry" | "failed" | "needs_manual"; detail: string };
 

@@ -11,6 +11,7 @@ Standalone scripts, not workspace packages. Run `tools/bootstrap.sh` once (insta
 - `tools/video-dl.sh <url>...` – download YouTube / Instagram / TikTok video. Prints file paths on stdout. See `.claude/skills/download-video/SKILL.md` for flags and failure handling. Downloads land in `downloads/` (gitignored).
 - `tools/ig-dl.sh post|profile|hashtag ...` – read public Instagram content with Instaloader (anonymous, optional throwaway login); see the download-video skill. Downloads land in `downloads/instagram/`.
 - `tools/creative-preview.sh <image>...` – builds `preview.html` next to the images (all in one folder) and prints an `::inline-vis{file="..."}` line, see "Showing creatives in chat". Images are embedded as data URIs (relative `src` and plain path links break in the chat viewer).
+- `tools/public-test.sh up [--links] | status | url | down` – a public test address for this Mac through a Cloudflare quick tunnel: a test page and the short-link redirect of the BrandWise instance, nothing else of bb. `--links` points the plugin's short links at it. Test only: the address changes at every start and links break while the Mac sleeps.
 - `tools/lowpoly/` – low-poly 3D film engine (Three.js in headless Chrome): an episode is a function of time, rendered to MP4 with narration and captions. See its README.
 
 ## Local infrastructure
@@ -20,6 +21,8 @@ Standalone scripts, not workspace packages. Run `tools/bootstrap.sh` once (insta
 ## BrandWise BB instance
 
 A dedicated bb instance (port 38896) runs the BrandWise; its plugin is `apps/bb-plugin-brandwise` (a thin shell over `packages/core`: campaigns, calendar and assets on Postgres + S3), provisioning is `infra/bb-instance/provision.sh`. Before starting, stopping or changing either, read `.claude/skills/bb-instance/SKILL.md` (env vars to target the right instance, sandbox caveats, plugin rules).
+
+Publishing channels (Telegram, e-mail, Facebook, Instagram, Threads, TikTok, YouTube, LinkedIn): one connector per network in `packages/core/src/connector-*.ts`; how a person connects an account is `docs/channels.md`.
 
 Video: `packages/video-remotion` is an optional engine (Remotion projects per campaign, Studio on 127.0.0.1, own licence, see its README); the plugin's Video page and `bb brandwise video ...` use it. Each BrandWise page has a "Start agent" action in its side panel (`apps/bb-plugin-brandwise/agents.ts`).
 

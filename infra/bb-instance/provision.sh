@@ -68,6 +68,11 @@ apply() {
    if [ -n "${RESEND_API_KEY:-}" ]; then cfg resendApiKey "$RESEND_API_KEY"; fi
    if [ -n "${RESEND_WEBHOOK_SECRET:-}" ]; then cfg resendWebhookSecret "$RESEND_WEBHOOK_SECRET"; fi
    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then cfg telegramBotToken "$TELEGRAM_BOT_TOKEN"; fi
+   if [ -n "${META_PUBLISH_TOKEN:-}" ]; then cfg metaPublishToken "$META_PUBLISH_TOKEN"; fi
+   if [ -n "${TIKTOK_CLIENT_KEY:-}" ]; then cfg tiktokClientKey "$TIKTOK_CLIENT_KEY"; cfg tiktokClientSecret "${TIKTOK_CLIENT_SECRET:-}"; fi
+   if [ -n "${YOUTUBE_CLIENT_ID:-}" ]; then cfg youtubeClientId "$YOUTUBE_CLIENT_ID"; cfg youtubeClientSecret "${YOUTUBE_CLIENT_SECRET:-}"; fi
+   if [ -n "${THREADS_APP_ID:-}" ]; then cfg threadsAppId "$THREADS_APP_ID"; cfg threadsAppSecret "${THREADS_APP_SECRET:-}"; fi
+   if [ -n "${LINKEDIN_CLIENT_ID:-}" ]; then cfg linkedinClientId "$LINKEDIN_CLIENT_ID"; cfg linkedinClientSecret "${LINKEDIN_CLIENT_SECRET:-}"; fi
    # the public address of the short-link redirect (docs/analytics.md, step 3); unset = links in posts are not shortened
    if [ -n "${LINKS_BASE_URL:-}" ]; then cfg linksBaseUrl "$LINKS_BASE_URL"; fi
    # optional video engine (agent-written Remotion templates); empty until its npm deps are installed

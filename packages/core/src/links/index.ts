@@ -16,16 +16,17 @@ export function createLinks(deps: {
   channels: readonly string[];
 }) {
   const q = async (sql: string, params: unknown[] = []) => (await deps.pool.query(sql, params)).rows;
+  /** The public address of a link: the redirect route with the signed code; null while short links are off. */
+  const shortUrl = (id: string) => { const base = deps.baseUrl(); return base ? `${base}${base.includes("?") ? "&" : "?"}c=${codeOf(deps.key, id)}` : null; };
   const links = {
     enabled: () => Boolean(deps.baseUrl()),
     /** The short link of `url` in an entry; the same link again gets the same code. Without a public address, `url` itself. */
     async shorten(entryId: string, url: string): Promise<string> {
-      const base = deps.baseUrl();
-      if (!base) return url;
+      if (!deps.baseUrl()) return url;
       const id = (await q(
         `insert into short_link (id, entry_id, url) values ($1,$2,$3) on conflict (entry_id, url) do update set url = excluded.url returning id`,
         [newLinkId(), entryId, url]))[0].id as string;
-      return `${base}${base.includes("?") ? "&" : "?"}c=${codeOf(deps.key, id)}`;
+      return shortUrl(id) ?? url;
     },
     /** Where a code leads, recording the request (a preview or crawler as a bot); null for a code we did not issue. */
     async resolve(code: string, req: { method: string; userAgent: string | null; ip: string | null }): Promise<string | null> {
@@ -37,12 +38,13 @@ export function createLinks(deps: {
       return row.url as string;
     },
     /** Per link of an entry: where it leads, people (unique visitors) and bot requests. */
-    async stats(entryId: string): Promise<{ url: string; clicks: number; visitors: number; bots: number }[]> {
+    /** Per link of the entry: where it leads, its short address (so a person can copy or test it), clicks, visitors and bot requests. */
+    async stats(entryId: string): Promise<{ url: string; short: string | null; clicks: number; visitors: number; bots: number }[]> {
       return (await q(
-        `select l.url, count(c.id) filter (where not c.bot) as clicks, count(distinct c.visitor) filter (where not c.bot) as visitors,
+        `select l.id, l.url, count(c.id) filter (where not c.bot) as clicks, count(distinct c.visitor) filter (where not c.bot) as visitors,
                 count(c.id) filter (where c.bot) as bots
          from short_link l left join link_click c on c.link_id = l.id where l.entry_id = $1 group by l.id, l.url order by l.created_at`, [entryId]))
-        .map((r: any) => ({ url: r.url, clicks: Number(r.clicks), visitors: Number(r.visitors), bots: Number(r.bots) }));
+        .map((r: any) => ({ url: r.url, short: shortUrl(r.id), clicks: Number(r.clicks), visitors: Number(r.visitors), bots: Number(r.bots) }));
     },
     /**
      * Clicks as a live metrics source: unique human visitors over all links of an entry, up to the moment asked, with at most

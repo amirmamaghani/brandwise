@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { EntryEmailPreview } from "./email-page";
 
-export const CHANNELS = ["instagram", "facebook", "linkedin", "tiktok", "email", "web"];
+export const CHANNELS = ["instagram", "facebook", "threads", "linkedin", "tiktok", "youtube", "telegram", "email", "web"];
 
 export function useCalendar() {
   const rpc = useRpc<typeof rpcContract>();

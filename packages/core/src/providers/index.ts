@@ -75,6 +75,24 @@ export const SETTING_FIELDS: SettingField[] = [
     options: ["none", "chrome", "safari", "firefox", "brave", "edge"], default: "none",
     description: "Instagram shows photos and many posts to signed-in sessions only. Pick the browser you are signed in to Instagram in and downloads use its session (macOS may ask for Keychain access). None = anonymous downloads. Only the user sets this, agents never choose a session.",
   },
+  // Connected accounts of channels that sign in over OAuth (docs/channels.md): written by `bb brandwise <platform> connect`, read by the
+  // connector per post. A child campaign inherits its parent's account. Only the user connects or replaces one.
+  {
+    key: "tiktok.refreshToken", label: "TikTok account", group: "TikTok", type: "string", secret: true,
+    description: "The refresh token of the creator account this campaign posts to, stored by bb brandwise tiktok connect. TikTok replaces it on every refresh; the connector saves the new one. Only the user connects an account.",
+  },
+  {
+    key: "youtube.refreshToken", label: "YouTube channel", group: "YouTube", type: "string", secret: true,
+    description: "The refresh token of the Google account whose channel this campaign uploads to, stored by bb brandwise youtube connect. Only the user connects a channel.",
+  },
+  {
+    key: "threads.accessToken", label: "Threads account", group: "Threads", type: "string", secret: true,
+    description: "The 60-day token of the Threads account this campaign posts to (with its dates), stored by bb brandwise threads connect and renewed at each post. Only the user connects an account.",
+  },
+  {
+    key: "linkedin.accessToken", label: "LinkedIn member", group: "LinkedIn", type: "string", secret: true,
+    description: "The 60-day token of the LinkedIn member this campaign posts as (with its dates), stored by bb brandwise linkedin connect. LinkedIn gives refresh tokens to approved partners only; otherwise connect again before it ends. Only the user connects a member.",
+  },
   { key: "generation.provider", label: "Provider", description: "Which provider generates creatives.", group: "Generation", type: "select", options: PROVIDERS.map((p) => p.id), default: PROVIDERS[0].id },
   ...PROVIDERS.flatMap((p) => [...p.fields, ...budgetFields(p)].map((f) => ({ ...f, key: `${p.id}.${f.key}`, group: p.label }))),
 ];

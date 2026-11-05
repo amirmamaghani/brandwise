@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>BrandWise public test page</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #0f1115; color: #e8e8ea; }
+  main { max-width: 36rem; padding: 2.5rem 1.5rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .5rem; }
+  .ok { display: inline-block; padding: .2rem .6rem; border-radius: 999px; background: #1f6f43; color: #e9fbef; font-size: .85rem; margin-bottom: 1.25rem; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 1.25rem 0; }
+  dt { color: #9aa0ab; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; background: #1b1f27; padding: .1rem .35rem; border-radius: 4px; }
+  p.note { color: #9aa0ab; font-size: .9rem; }
+  a { color: #8ab4ff; }
+</style>
+</head>
+<body>
+<main>
+  <span class="ok">reachable</span>
+  <h1>BrandWise public test page</h1>
+  <p>This page is served by a Mac running the BrandWise instance and reaches you through a Cloudflare quick tunnel. Only this page and the short-link redirect are public; the BrandWise itself stays on the Mac.</p>
+  <dl>
+    <dt>Served at</dt><dd><code>{{now}}</code></dd>
+    <dt>Address</dt><dd><code>{{host}}</code></dd>
+  </dl>
+  <p>Short links in published posts look like <code>https://{{host}}/l?c=…</code>: each redirects to the post's link and counts the click for its calendar entry. A code that was never issued answers 404, try <a href="/l?c=test">/l?c=test</a>.</p>
+  <p class="note">Test setup: the address changes every time the tunnel starts, and links stop working while the Mac sleeps. See <code>tools/public-test.sh</code>.</p>
+</main>
+</body>
+</html>
