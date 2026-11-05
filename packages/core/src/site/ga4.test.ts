@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import type { EntryRef } from "../metrics/domain.ts";
+import { PartialPullError, type EntryRef } from "../metrics/domain.ts";
 import { assertion, ga4Source, parseServiceAccount, type ServiceAccount } from "./ga4.ts";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -51,4 +51,28 @@ test("pull: no service account measures nothing; a bad property id or a missing 
   const denied = (async (url: string) => (url.includes("oauth2") ? Response.json({ access_token: "t", expires_in: 3600 }) : Response.json({ error: { message: "User does not have sufficient permissions" } }, { status: 403 }))) as typeof fetch;
   await assert.rejects(ga4Source({ credentials: () => sa, targetOf: async () => ({ propertyId: "312345678" }), fetchImpl: denied }).pull!([ref("e1", "c")], NOW), /add bw@proj\.iam\.gserviceaccount\.com to the property as a Viewer/);
   await assert.rejects(ga4Source({ credentials: () => sa, targetOf: async () => ({ propertyId: "../../x" }), fetchImpl: denied }).pull!([ref("e1", "c")], NOW), /is not a number/);
+});
+
+test("pull: one property that refuses or is misnamed costs only its own brand; the others are measured and the errors reported", async () => {
+  const fetchImpl = (async (url: string, init: any) => {
+    if (url.includes("oauth2")) return Response.json({ access_token: "t", expires_in: 3600 });
+    if (url.includes("/properties/312345678:")) return Response.json({ error: { message: "User does not have sufficient permissions" } }, { status: 403 });
+    return Response.json({ rows: [{ dimensionValues: [{ value: "e3" }], metricValues: [{ value: "7" }, { value: "1" }, { value: "0" }, { value: "0" }] }] });
+  }) as typeof fetch;
+  const targets: Record<string, Record<string, string>> = {
+    lost: { propertyId: "312345678" }, ok: { propertyId: "398765432" }, typo: { propertyId: "G-ABC123" },
+    greedy: { propertyId: "377777777", leadEvents: "a1,a2,a3,a4,a5,a6,a7,a8" },
+  };
+  const src = ga4Source({ credentials: () => sa, targetOf: async (c) => targets[c], fetchImpl });
+  const err = await src.pull!([ref("e1", "lost"), ref("e3", "ok"), ref("e5", "typo"), ref("e6", "greedy")], NOW).then(() => null, (e) => e);
+  assert.ok(err instanceof PartialPullError, "a partial failure, not a lost pull");
+  assert.deepEqual(err.snapshots.map((s: any) => [s.entryId, s.values.visits]), [["e3", 7]]);
+  assert.equal(err.errors.length, 3);
+  assert.match(err.message, /add bw@proj\.iam\.gserviceaccount\.com to the property as a Viewer/);
+  assert.match(err.message, /"G-ABC123" is not a number/);
+  assert.match(err.message, /at most 7 leadEvents/);
+
+  const noSignIn = (async () => Response.json({ error: "invalid_grant", error_description: "Invalid JWT Signature." }, { status: 400 })) as typeof fetch;
+  await assert.rejects(ga4Source({ credentials: () => sa, targetOf: async (c) => targets[c], fetchImpl: noSignIn }).pull!([ref("e3", "ok")], NOW),
+    (e: unknown) => !(e instanceof PartialPullError) && /GA4 sign-in failed: Invalid JWT Signature/.test(String(e)), "a broken service account fails the whole pull");
 });

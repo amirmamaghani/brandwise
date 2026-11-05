@@ -2,7 +2,7 @@
 // the moment wanted; pull sources are read from the snapshots `pull` stored. The regulator, the CLI and later the pages read from here,
 // never from a channel's own tables.
 import type { CalendarEntry, Core } from "../index.ts";
-import { measuresChannel, merge, type EntryMetrics, type EntryRef, type MetricsSource, type Snapshot } from "./domain.ts";
+import { measuresChannel, merge, PartialPullError, type EntryMetrics, type EntryRef, type MetricsSource, type Snapshot } from "./domain.ts";
 import { metricsStore } from "./store.ts";
 
 export * from "./domain.ts";
@@ -67,9 +67,10 @@ export function createMetrics(deps: { core: Core; sources: MetricsSource[] }) {
     },
     /**
      * Ask every pull source (or one) for the current totals of the published entries of its channels and store them. Safe to repeat;
-     * entries published more than `days` ago are no longer asked (their numbers have settled). One failing source does not stop the others.
+     * entries published more than `days` ago are no longer asked (their numbers have settled). One failing source does not stop the others,
+     * and a source that failed for only some of its targets (PartialPullError) keeps the numbers it got.
      */
-    async pull(now: Date, opts: { source?: string; days?: number } = {}): Promise<{ source: string; entries: number; stored: number; error?: string }[]> {
+    async pull(now: Date, opts: { source?: string; days?: number } = {}): Promise<{ source: string; entries: number; stored: number; error?: string; partial?: boolean }[]> {
       const pullers = deps.sources.filter((s) => s.pull && (!opts.source || s.id === opts.source));
       if (opts.source && pullers.length === 0) throw new Error(`No pull source "${opts.source}" (pull sources: ${deps.sources.filter((s) => s.pull).map((s) => s.id).join(", ") || "none"})`);
       const since = now.getTime() - (opts.days ?? 30) * 86_400_000;
@@ -78,12 +79,14 @@ export function createMetrics(deps: { core: Core; sources: MetricsSource[] }) {
       const out = [];
       for (const s of pullers) {
         const mine = all.filter((e) => measuresChannel(s, e.channel) && Date.parse(started.get(e.id) ?? e.scheduledAt) >= since);
+        const known = new Set(mine.map((e) => e.id));
+        const keep = (snaps: Snapshot[]) => store.write(s.id, snaps.filter((x) => known.has(x.entryId)), now);
         try {
           const snaps = mine.length ? await s.pull!(mine.map(refOf), now) : [];
-          const known = new Set(mine.map((e) => e.id));
-          out.push({ source: s.id, entries: mine.length, stored: await store.write(s.id, snaps.filter((x) => known.has(x.entryId)), now) });
+          out.push({ source: s.id, entries: mine.length, stored: await keep(snaps) });
         } catch (err) {
-          out.push({ source: s.id, entries: mine.length, stored: 0, error: err instanceof Error ? err.message : String(err) });
+          if (err instanceof PartialPullError) out.push({ source: s.id, entries: mine.length, stored: await keep(err.snapshots), error: err.message, partial: true });
+          else out.push({ source: s.id, entries: mine.length, stored: 0, error: err instanceof Error ? err.message : String(err) });
         }
       }
       return out;

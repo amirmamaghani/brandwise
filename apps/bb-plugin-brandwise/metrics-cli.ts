@@ -60,9 +60,13 @@ export function createMetricsCli(deps: { core: () => Core; metrics: () => Metric
       const days = val(args, "--days");
       if (days !== undefined && !(Number(days) > 0)) return { exitCode: 1, stderr: "--days is a positive number" };
       const r = await m.pull(asOf, { source: val(args, "--source"), days: days === undefined ? undefined : Number(days) });
-      const failed = r.some((x) => x.error);
-      const text = r.map((x) => `${x.source}: ${x.entries} entries asked, ${x.stored} numbers stored${x.error ? `, FAILED: ${x.error}` : ""}`).join("\n") || "No pull sources: e-mail is read live and needs no pull.";
-      return failed ? { exitCode: 1, stderr: text } : reply(r, text);
+      const text = r.map((x) => `${x.source}: ${x.entries} entries asked, ${x.stored} numbers stored${x.error ? `, ${x.partial ? "FAILED for some" : "FAILED"}: ${x.error}` : ""}`).join("\n") || "No pull sources: e-mail is read live and needs no pull.";
+      // The hourly automation runs this. bb pauses an automation after three failing runs, which would stop every source; so one broken
+      // source (an expired token, one client's lost access) is reported in the output and does not fail the run. Only a run in which
+      // no source that had entries to ask got anything through fails.
+      const asked = r.filter((x) => x.entries > 0);
+      const nothingWorked = asked.length > 0 && asked.every((x) => x.error && !x.partial);
+      return nothingWorked ? { exitCode: 1, stderr: text } : reply(r, text);
     }
     return { exitCode: 1, stderr: usage };
   };

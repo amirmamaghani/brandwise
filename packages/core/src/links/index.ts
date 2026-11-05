@@ -33,7 +33,9 @@ export function createLinks(deps: {
       if (!id) return null;
       const row = (await q("select url from short_link where id = $1", [id]))[0];
       if (!row) return null;
-      await q("insert into link_click (link_id, visitor, source, bot) values ($1,$2,$3,$4)", [id, visitorOf(deps.key, req.ip, req.userAgent), sourceOf(deps.key, req.ip), isBot(req.method, req.userAgent)]);
+      // the visitor goes on even when the click cannot be recorded (a database in recovery): a lost count beats a broken link
+      await q("insert into link_click (link_id, visitor, source, bot) values ($1,$2,$3,$4)", [id, visitorOf(deps.key, req.ip, req.userAgent), sourceOf(deps.key, req.ip), isBot(req.method, req.userAgent)])
+        .catch((err) => { console.error(`short link ${id}: click not recorded: ${err instanceof Error ? err.message : String(err)}`); });
       return row.url as string;
     },
     /** Per link of an entry: where it leads, people (unique visitors) and bot requests. */

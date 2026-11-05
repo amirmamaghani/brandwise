@@ -10,7 +10,7 @@ import { migrate } from "../migrate.ts";
 import { runDue } from "../publish.ts";
 import { createRegulator } from "../regulator/index.ts";
 import { purge } from "../testing.ts";
-import { createMetrics, type MetricsSource, type Snapshot } from "./index.ts";
+import { createMetrics, PartialPullError, type MetricsSource, type Snapshot } from "./index.ts";
 
 const run = process.env.DATABASE_URL && process.env.S3_BUCKET ? test : test.skip;
 const HOUR = 3_600_000;
@@ -70,6 +70,30 @@ run("pull sources: snapshots as of a moment, idempotent, publish time as the sta
     assert.equal(done.verdict, "B", done.reasons.join(" "));
     const s = await reg.signals(base.id, t2.toISOString());
     assert.equal(s.recent.find((r) => r.entryId === b.id)?.complaintRate, null, "complaints are not measured on this channel: unknown, not 0");
+  } finally {
+    await purge(core, tag);
+    await core.close();
+  }
+});
+
+run("pull: a source that fails for some targets keeps the numbers it got, and a broken source does not stop the others", async () => {
+  await migrate(process.env.DATABASE_URL!);
+  const core = createCore(configFromEnv());
+  const tag = `test-${Date.now()}-${randomBytes(3).toString("hex")}-partial`;
+  try {
+    const base = await core.campaigns.add({ name: `${tag}-base`, kind: "always_on" });
+    const e1 = await core.calendar.add({ campaignId: base.id, title: "One", channel: "mock", scheduledAt: new Date(Date.now() - 60_000).toISOString(), tier: 1 });
+    const e2 = await core.calendar.add({ campaignId: base.id, title: "Two", channel: "mock", scheduledAt: new Date(Date.now() - 60_000).toISOString(), tier: 1 });
+    await runDue(core, [mock], 5, [base.id]);
+    const partial: MetricsSource = { id: "partial", channels: ["mock"], measures: ["clicks"], async pull() { throw new PartialPullError([{ entryId: e1.id, values: { clicks: 5 } }], [`brand X refused access`]); } };
+    const broken: MetricsSource = { id: "broken", channels: ["mock"], measures: ["visits"], async pull() { throw new Error("token expired"); } };
+    const metrics = createMetrics({ core, sources: [partial, broken] });
+    const r = await metrics.pull(new Date(Date.now() + HOUR));
+    const mine = (id: string) => r.find((x) => x.source === id)!;
+    assert.deepEqual([mine("partial").stored, mine("partial").partial, mine("partial").error], [1, true, "brand X refused access"]);
+    assert.deepEqual([mine("broken").stored, mine("broken").partial, mine("broken").error], [0, undefined, "token expired"]);
+    assert.equal((await metrics.entry(e1.id, new Date(Date.now() + 2 * HOUR))).values.clicks, 5);
+    assert.deepEqual((await metrics.entry(e2.id, new Date(Date.now() + 2 * HOUR))).values, {}, "the target that failed is unknown, not 0");
   } finally {
     await purge(core, tag);
     await core.close();

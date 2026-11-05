@@ -58,7 +58,12 @@ export function buildSignals(input: {
   const byEntry = new Map(input.sends.map((s) => [s.entryId, s]));
   const sorted = [...input.sends].sort((a, b) => (b.sentAt ?? "").localeCompare(a.sentAt ?? ""));
   const matured = sorted.filter((s) => isMature(armOf(s), asOf, rails));
-  const window = matured.slice(0, k);
+  // Goals and power are rates over exposures, so only sends whose exposures are measured can carry them (a post or a page visit
+  // without views would push the e-mails out of the window), and only one channel at a time: a click per delivered e-mail and a click
+  // per ad impression are different rates and must not be pooled. The channel is the one of the latest measured send.
+  const measured = matured.filter((s) => s.metrics.values.exposures !== undefined);
+  const channel = measured[0]?.channel ?? null;
+  const window = measured.filter((s) => s.channel === channel).slice(0, k);
 
   const running = experiments.filter((e) => e.status === "running").map((e) => {
     const a = byEntry.get(e.armA), b = byEntry.get(e.armB);
@@ -69,7 +74,9 @@ export function buildSignals(input: {
   const incumbent = input.state.incumbentEntryId ? byEntry.get(input.state.incumbentEntryId) : undefined;
   const notes: string[] = [];
   if (matured.length === 0) notes.push("No send has matured yet: there is nothing to regulate on. Wait for the first send to age.");
+  else if (measured.length === 0) notes.push("No matured send has measured exposures (views, deliveries, impressions) yet: goals cannot be judged.");
   if (window.length > 0 && window.length < k) notes.push(`Only ${window.length} matured send(s) so far, the smoothed rate is rough.`);
+  if (channel !== null && measured.some((s) => s.channel !== channel)) notes.push(`Goals are measured on the latest ${channel} sends; sends on other channels are listed below but not pooled with them.`);
 
   return {
     asOf: asOf.toISOString(),

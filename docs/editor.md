@@ -7,7 +7,7 @@ People set the goals. An **editor agent** watches the results and steers the cam
 | Control theory | In BrandWise |
 |---|---|
 | Setpoint | goals per campaign: `click_rate` target, `complaint_rate` / `unsubscribe_rate` / `bounce_rate` limits. Set by a person. |
-| Sensor | the metrics of published entries from every metrics source (`packages/core/src/metrics`, `docs/analytics.md`), turned into signals (`bb brandwise editor signals`); today the only source is e-mail |
+| Sensor | the metrics of published entries from every metrics source (`packages/core/src/metrics`, `docs/analytics.md`), turned into signals (`bb brandwise editor signals`). Goals are rates over exposures, so they are taken from the latest sends of one channel whose exposures are measured (today e-mail and Meta ads); other channels are listed, not pooled |
 | Controller | the editor agent (skill `editor`), one run per invocation, memory in the journal |
 | Actuator | tasks for author agents, then calendar entries, then the scheduler and the provider |
 | Plant | the audience and the mailbox providers |

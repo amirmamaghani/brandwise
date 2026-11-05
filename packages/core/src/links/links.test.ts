@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { telegram } from "../connector-telegram.ts";
 import type { PublishInput } from "../publish.ts";
 import { clientAddress, codeOf, isBot, newLinkId, replaceUrls, verifyCode } from "./domain.ts";
+import { createLinks } from "./index.ts";
 
 const CHROME = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 
@@ -44,4 +45,18 @@ test("telegram posts our short links, made from the UTM-tagged links of the entr
   await t.publish({ idempotencyKey: "k", entry, asset: null, target: { chatId: "@c" } });
   assert.equal(sent[0].text, "New drop: https://go.example.com/l?c=1.\n\nhttps://go.example.com/l?c=2");
   assert.ok(asked.every((a) => a.startsWith("e1 ") && a.includes("utm_content=e1")), "the target keeps the entry's UTM tags");
+});
+
+test("resolve: a click that cannot be recorded (database in recovery) still sends the visitor on", async () => {
+  const id = newLinkId();
+  const pool = { query: async (sql: string) => {
+    if (sql.startsWith("select url")) return { rows: [{ url: "https://shop.example/?utm_content=e1" }] };
+    throw new Error("the database system is in recovery mode");
+  } } as unknown as import("pg").Pool;
+  const links = createLinks({ pool, key: "key", baseUrl: () => "https://go.example/l", channels: ["telegram"] });
+  const quiet = console.error; console.error = () => {};
+  try {
+    assert.equal(await links.resolve(codeOf("key", id), { method: "GET", userAgent: "Mozilla/5.0", ip: "203.0.113.9" }), "https://shop.example/?utm_content=e1");
+  } finally { console.error = quiet; }
+  assert.equal(await links.resolve("forged.code", { method: "GET", userAgent: "Mozilla/5.0", ip: null }), null, "a code we did not issue is still unknown");
 });

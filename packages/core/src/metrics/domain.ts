@@ -40,6 +40,24 @@ export interface MetricsSource {
 
 export const measuresChannel = (s: Pick<MetricsSource, "channels">, channel: string) => s.channels.includes("*") || s.channels.includes(channel);
 
+/**
+ * A pull that measured some entries and failed for others (one brand's GA4 property refused access, one ad id Meta does not know).
+ * The snapshots it got are stored; the errors are reported. A source throws this instead of losing every number for one bad target.
+ */
+export class PartialPullError extends Error {
+  readonly snapshots: Snapshot[];
+  readonly errors: string[];
+  constructor(snapshots: Snapshot[], errors: string[]) {
+    super(errors.join("; "));
+    this.name = "PartialPullError";
+    this.snapshots = snapshots;
+    this.errors = errors;
+  }
+}
+
+/** Calls to platforms give up after this long, so one hanging answer cannot hold a pull until the automation's own timeout. */
+export const FETCH_TIMEOUT_MS = 30_000;
+
 /** An entry's numbers merged over every source that measures its channel; `sources` says where each number came from. */
 export type EntryMetrics = { entryId: string; channel: string; startedAt: string | null; values: Partial<Record<MetricName, number>>; sources: Partial<Record<MetricName, string>> };
 

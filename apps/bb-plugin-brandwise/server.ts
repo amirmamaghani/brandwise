@@ -18,7 +18,7 @@ import { sleep, slug } from "./util.ts";
 import { connectorsFrom, runDue, SHORTENED_CHANNELS } from "./core/publish.ts";
 import { clientAddress, createLinks } from "./core/links/index.ts";
 import { ga4Source, parseServiceAccount } from "./core/site/ga4.ts";
-import { META_CHANNEL, metaAdsSource } from "./core/ads/meta.ts";
+import { adIdOf, META_CHANNEL, metaAdsSource } from "./core/ads/meta.ts";
 import { campaignSlug, withUtm } from "./core/email/domain/render.ts";
 import { createEmail } from "./core/email/index.ts";
 import { createRegulator } from "./core/regulator/index.ts";
@@ -325,6 +325,11 @@ export default async function plugin(bb: BbPluginApi) {
   });
   // Meta ads, read only: lifetime insights per ad id, asked by `metrics pull`.
   const meta = metaAdsSource({ token: () => cfg.metaAccessToken.trim() || null, version: () => cfg.metaApiVersion.trim() || "v23.0" });
+  /** An id the metrics source of the entry's channel could never read is refused when a person records it, not ignored later. */
+  const checkExternalId = async (id: string, externalId: string) => {
+    const e = await need().calendar.get(id);
+    if (e?.channel === META_CHANNEL && !adIdOf({ externalId })) throw new Error(`"${externalId}" is not a Meta ad id: give the ad's numeric id (Ads Manager > the ad > ID), not the account or campaign id`);
+  };
   const metrics = core === null ? null : createMetrics({ core, sources: [...(email ? [email.metricsSource()] : []), meta, ...(links ? [links.metricsSource()] : []), ...(ga4 ? [ga4] : [])] });
   // The editor-in-chief regulator (rails, signals, experiments, journal, tasks) and the development clock.
   const regulator = core !== null && metrics !== null ? createRegulator({ core, metrics, library: () => emailTemplates.library() }) : null;
@@ -602,6 +607,7 @@ export default async function plugin(bb: BbPluginApi) {
       return entry;
     },
     calendar_published: async ({ id, externalId, url }) => {
+      await checkExternalId(id, externalId);
       const entry = await need().publishing.publishedByHand(id, { externalId, url: url || null }, "ui");
       await changed();
       return entry;
@@ -1259,6 +1265,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (area === "calendar" && action === "published") { // a person published a needs_manual entry by hand and says where
           const id = positional(args.slice(2))[0], external = val(args, "--external");
           if (!id || !external) return { exitCode: 1, stderr: usage };
+          await checkExternalId(id, external);
           const e = await c.publishing.publishedByHand(id, { externalId: external, url: val(args, "--url") ?? null }, cliActor(args));
           await changed();
           return reply(e, fmtEntry(e));
@@ -1270,7 +1277,7 @@ export default async function plugin(bb: BbPluginApi) {
           if (!e) return { exitCode: 1, stderr: `No calendar entry with id ${id}` };
           if (!e.link) return { exitCode: 1, stderr: `Entry ${id} has no link (calendar edit ${id} --link <url>)` };
           const paid = e.channel === META_CHANNEL;
-          const url = withUtm(e.link, { entryId: e.id, campaign: campaignSlug(e.campaignName), medium: paid ? "paid" : "social", source: paid ? "meta" : e.channel });
+          const url = withUtm(e.link, { entryId: e.id, campaign: campaignSlug(e.campaignName), medium: paid ? "paid" : e.channel === "telegram" ? "messenger" : e.channel === "email" ? "email" : "social", source: paid ? "meta" : e.channel });
           return reply({ url }, url);
         }
         if (area === "calendar" && action === "history") {

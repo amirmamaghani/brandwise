@@ -4,7 +4,7 @@
 // person names the property on the brand's base campaign (`campaign channel set site propertyId=<id> [leadEvents=generate_lead,...]`).
 // Reads the Data API (analyticsdata.googleapis.com, runReport) with a service-account token; nothing is written to Google.
 import { createSign } from "node:crypto";
-import type { EntryRef, MetricsSource, Snapshot } from "../metrics/domain.ts";
+import { FETCH_TIMEOUT_MS, PartialPullError, type EntryRef, type MetricsSource, type Snapshot } from "../metrics/domain.ts";
 
 /** The fields of a Google service-account key file this adapter uses. */
 export type ServiceAccount = { client_email: string; private_key: string; token_uri?: string };
@@ -13,6 +13,8 @@ const SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
 const API = "https://analyticsdata.googleapis.com/v1beta";
 /** GA4 limits a filter's list; ask in chunks. */
 const CHUNK = 100;
+/** runReport takes at most 10 metrics: sessions, purchases and revenue leave room for 7 lead events. */
+const MAX_LEAD_EVENTS = 7;
 
 export function parseServiceAccount(json: string): ServiceAccount {
   let v: any;
@@ -45,7 +47,7 @@ export function ga4Source(deps: {
   async function accessToken(sa: ServiceAccount, now: Date): Promise<string> {
     if (token && token.email === sa.client_email && token.until > now.getTime() + 60_000) return token.value;
     const res = await f(sa.token_uri ?? "https://oauth2.googleapis.com/token", {
-      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: assertion(sa, now) }).toString(),
     });
     const j: any = await res.json().catch(() => ({}));
@@ -55,11 +57,44 @@ export function ga4Source(deps: {
   }
 
   /** Lead events of a property: the names given in its target, or every key event when none is given. */
-  const leadMetrics = (target: Record<string, string>) => {
+  const leadMetrics = (property: string, target: Record<string, string>) => {
     const events = (target.leadEvents ?? "").split(",").map((e) => e.trim()).filter((e) => /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(e));
+    if (events.length > MAX_LEAD_EVENTS) throw new Error(`GA4 property ${property}: at most ${MAX_LEAD_EVENTS} leadEvents (GA4 reports 10 metrics per request), ${events.length} are set`);
     return events.length ? events.map((e) => `keyEvents:${e}`) : ["keyEvents"];
   };
 
+  /** One property's numbers for these entries; throws when GA4 refuses, so the caller can keep the other properties. */
+  async function measureProperty(sa: ServiceAccount, now: Date, property: string, target: Record<string, string>, ids: string[]): Promise<Snapshot[]> {
+    const out: Snapshot[] = [];
+    const leads = leadMetrics(property, target);
+    const metrics = ["sessions", ...leads, "ecommercePurchases", "purchaseRevenue"];
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const res = await f(`${API}/properties/${property}:runReport`, {
+        method: "POST", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { authorization: `Bearer ${await accessToken(sa, now)}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          // the whole life of the entries: a session cannot carry an entry's id before the entry was published
+          dateRanges: [{ startDate: "2020-01-01", endDate: "today" }],
+          dimensions: [{ name: "sessionManualAdContent" }],
+          metrics: metrics.map((name) => ({ name })),
+          dimensionFilter: { filter: { fieldName: "sessionManualAdContent", inListFilter: { values: chunk, caseSensitive: true } } },
+          limit: CHUNK,
+        }),
+      });
+      const j: any = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`GA4 property ${property}: ${j.error?.message ?? res.status}${res.status === 403 ? ` (add ${sa.client_email} to the property as a Viewer)` : ""}`);
+      const rows = new Map<string, number[]>();
+      for (const r of j.rows ?? []) rows.set(r.dimensionValues?.[0]?.value, (r.metricValues ?? []).map((m: any) => Number(m.value)));
+      for (const id of chunk) {
+        // GA4 leaves out rows that are all zero: an entry of a measured property with no row had no visit yet
+        const v = rows.get(id) ?? metrics.map(() => 0);
+        const sum = (from: number, n: number) => v.slice(from, from + n).reduce((t, x) => t + (Number.isFinite(x) ? x : 0), 0);
+        out.push({ entryId: id, values: { visits: sum(0, 1), leads: sum(1, leads.length), orders: sum(1 + leads.length, 1), revenue: sum(2 + leads.length, 1) } });
+      }
+    }
+    return out;
+  }
   return {
     id: "ga4",
     channels: ["*"],
@@ -70,46 +105,29 @@ export function ga4Source(deps: {
       // entries grouped by the property their campaign names; entries of campaigns without one are not measured
       const byProperty = new Map<string, { target: Record<string, string>; ids: string[] }>();
       const targets = new Map<string, Record<string, string> | null>();
+      const errors: string[] = [];
       for (const e of entries) {
         if (!targets.has(e.campaignId)) targets.set(e.campaignId, await deps.targetOf(e.campaignId));
         const t = targets.get(e.campaignId);
         const property = t?.propertyId?.trim();
         if (!t || !property) continue;
-        if (!/^\d{5,15}$/.test(property)) throw new Error(`GA4 propertyId "${property}" is not a number (find it under Admin > Property details)`);
+        if (!/^\d{5,15}$/.test(property)) {
+          const why = `GA4 propertyId "${property}" is not a number (find it under Admin > Property details)`;
+          if (!errors.includes(why)) errors.push(why);
+          continue;
+        }
         const g = byProperty.get(property) ?? { target: t, ids: [] };
         g.ids.push(e.id);
         byProperty.set(property, g);
       }
+      // the sign-in is shared by every property: if it fails, nothing can be measured and the whole pull fails
+      if (byProperty.size > 0) await accessToken(sa, now);
       const out: Snapshot[] = [];
+      // one property that refuses (the client removed our access, a wrong id) costs only its own brand's numbers
       for (const [property, { target, ids }] of byProperty) {
-        const leads = leadMetrics(target);
-        const metrics = ["sessions", ...leads, "ecommercePurchases", "purchaseRevenue"];
-        for (let i = 0; i < ids.length; i += CHUNK) {
-          const chunk = ids.slice(i, i + CHUNK);
-          const res = await f(`${API}/properties/${property}:runReport`, {
-            method: "POST",
-            headers: { authorization: `Bearer ${await accessToken(sa, now)}`, "content-type": "application/json" },
-            body: JSON.stringify({
-              // the whole life of the entries: a session cannot carry an entry's id before the entry was published
-              dateRanges: [{ startDate: "2020-01-01", endDate: "today" }],
-              dimensions: [{ name: "sessionManualAdContent" }],
-              metrics: metrics.map((name) => ({ name })),
-              dimensionFilter: { filter: { fieldName: "sessionManualAdContent", inListFilter: { values: chunk, caseSensitive: true } } },
-              limit: CHUNK,
-            }),
-          });
-          const j: any = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(`GA4 property ${property}: ${j.error?.message ?? res.status}${res.status === 403 ? ` (add ${sa.client_email} to the property as a Viewer)` : ""}`);
-          const rows = new Map<string, number[]>();
-          for (const r of j.rows ?? []) rows.set(r.dimensionValues?.[0]?.value, (r.metricValues ?? []).map((m: any) => Number(m.value)));
-          for (const id of chunk) {
-            // GA4 leaves out rows that are all zero: an entry of a measured property with no row had no visit yet
-            const v = rows.get(id) ?? metrics.map(() => 0);
-            const sum = (from: number, n: number) => v.slice(from, from + n).reduce((t, x) => t + (Number.isFinite(x) ? x : 0), 0);
-            out.push({ entryId: id, values: { visits: sum(0, 1), leads: sum(1, leads.length), orders: sum(1 + leads.length, 1), revenue: sum(2 + leads.length, 1) } });
-          }
-        }
+        try { out.push(...await measureProperty(sa, now, property, target, ids)); } catch (err) { errors.push(err instanceof Error ? err.message : String(err)); }
       }
+      if (errors.length) throw new PartialPullError(out, errors);
       return out;
     },
   };
