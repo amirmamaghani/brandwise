@@ -334,10 +334,21 @@ export default async function plugin(bb: BbPluginApi) {
   const allConnectors = () => [...connectorsFrom(cfg, { shorten: links?.enabled() ? links.shorten : undefined }), ...(email && email.providers.length > 0 ? [email.connector()] : [])];
   // The short-link redirect. Public by nature, so no bb login: a code carries our signature, a code we did not issue is a 404, and the
   // target is only ever a URL we stored when publishing (no open redirect). Previews and crawlers are recorded as bots, not clicks.
+  // Every request that resolves writes a click row, so one address gets 120 a minute (requests without an address share one bucket of 600).
+  // shortcut: in memory, per process; a restart resets it. Upgrade to a shared limiter if the plugin ever runs in several processes.
+  const redirectHits = new Map<string, { n: number; reset: number }>();
+  const redirectLimited = (ip: string | null) => {
+    const now = Date.now(), key = ip ?? "", cap = ip ? 120 : 600;
+    if (redirectHits.size > 10_000) for (const [k, v] of redirectHits) if (v.reset < now) redirectHits.delete(k);
+    const h = redirectHits.get(key);
+    if (!h || h.reset < now) { redirectHits.set(key, { n: 1, reset: now + 60_000 }); return false; }
+    return ++h.n > cap;
+  };
   for (const method of ["GET", "HEAD"]) {
     bb.http.route(method, "/l", async (ctx) => {
       // only the entry our own proxy appended; anything left of it is the client's to forge
       const ip = clientAddress(ctx.req.header("x-forwarded-for"));
+      if (redirectLimited(ip)) return new Response("Too many requests.", { status: 429, headers: { "retry-after": "60", "content-type": "text/plain; charset=utf-8" } });
       const url = links ? await links.resolve(ctx.req.query("c") ?? "", { method, userAgent: ctx.req.header("user-agent") ?? null, ip }).catch(() => null) : null;
       if (url === null) return new Response("This link does not exist.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
       return new Response(null, { status: 302, headers: { location: url, "cache-control": "no-store", "referrer-policy": "no-referrer-when-downgrade" } });
